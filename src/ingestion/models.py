@@ -45,13 +45,11 @@ class OptimizerConfig:
     # Compression strategy
     # "turn"     — v1: threshold-based turn-level classification
     # "sentence" — v2: sentence-level classification within landmark turns
-    # "topk"     — v3: top-K retrieval — keep the K most relevant non-landmark
-    #              turns, compress the rest. Guaranteed token reduction regardless
-    #              of landmark density.
+    # "topk"     — v3: proportional top-K retrieval
     compression_strategy: str = "turn"
 
     # Query classification
-    query_classifier: str = "rules"     # "rules" | "llm"
+    query_classifier: str = "rules"
 
     # Scoring weights per query type
     lambda_decay: float = 0.05
@@ -62,28 +60,31 @@ class OptimizerConfig:
         "preference": {"keyword": 0.2, "semantic": 0.3, "recency": 0.5},
     })
 
-    # Turn-level compression thresholds (v1 strategy).
+    # Turn-level compression thresholds (v1).
     thresholds: dict = field(default_factory=lambda: {
         "factual":    {"high": 0.72, "low": 0.45},
         "analytical": {"high": 0.65, "low": 0.40},
         "preference": {"high": 0.60, "low": 0.35},
     })
 
-    # Sentence-level compression thresholds (v2 strategy).
+    # Sentence-level compression thresholds (v2).
     sentence_thresholds: dict = field(default_factory=lambda: {
         "factual":    {"high": 0.80, "low": 0.60},
         "analytical": {"high": 0.75, "low": 0.55},
         "preference": {"high": 0.70, "low": 0.50},
     })
 
-    # Top-K retrieval settings (v3 strategy).
-    # K = max number of non-landmark turns to keep verbatim.
-    # topk_min_score = floor below which turns are always COMPRESSed
-    # regardless of K — prevents low-quality noise making it into top K.
-    topk_k: dict = field(default_factory=lambda: {
-        "factual":    6,
-        "analytical": 12,
-        "preference": 8,
+    # Top-K retrieval settings (v3).
+    # topk_fraction: fraction of non-landmark turns to keep verbatim.
+    #   factual    — 0.20 (specific answer, keep only top 20%)
+    #   analytical — 0.35 (reasoning required, keep more context)
+    #   preference — 0.25 (intermediate)
+    # topk_min_score: noise floor — turns below this always compressed
+    #   regardless of K, preventing low-quality content filling K slots.
+    topk_fraction: dict = field(default_factory=lambda: {
+        "factual":    0.20,
+        "analytical": 0.35,
+        "preference": 0.25,
     })
     topk_min_score: float = 0.30
 

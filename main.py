@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import os
 import sys
 import warnings
@@ -151,8 +152,10 @@ def cmd_inspect(
             compress_count = sum(1 for t in classified if t.disposition == "COMPRESS")
             landmarks      = sum(1 for t in classified if t.is_landmark)
             compress_runs  = sum(1 for d, _ in runs if d == "COMPRESS")
-            k              = config.topk_k[query_type]
-            print(f"Landmarks detected: {landmarks}  |  K={k} non-landmark turns kept")
+            non_lm         = sum(1 for t in classified if not t.is_landmark)
+            k              = max(1, math.ceil(config.topk_fraction[query_type] * non_lm))
+            fraction       = config.topk_fraction[query_type]
+            print(f"Landmarks detected: {landmarks}  |  fraction={fraction:.0%}  K={k}/{non_lm} non-landmark turns kept")
             print(f"Turns to KEEP:      {keep}")
             print(f"Turns to COMPRESS:  {compress_count} ({compress_runs} runs → {compress_runs} LLM calls)")
             print(f"Est. token reduction: ~{100*compress_count/len(history):.0f}%")
@@ -237,7 +240,7 @@ def main() -> None:
     parser.add_argument("--judge",       default="gpt-4o")
     parser.add_argument("--compression-strategy", default="turn",
                         choices=["turn", "sentence", "topk"],
-                        help="turn=v1 threshold-based, sentence=v2 sentence-level, topk=v3 top-K retrieval")
+                        help="turn=v1 threshold-based, sentence=v2 sentence-level, topk=v3 proportional top-K")
 
     args   = parser.parse_args()
     config = OptimizerConfig(
