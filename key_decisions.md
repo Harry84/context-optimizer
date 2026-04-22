@@ -222,4 +222,34 @@
 
 ---
 
+## KD-016 — Turn-Level vs. Sentence-Level Compression
+
+**Decision:** v1 implements turn-level compression. Sentence-level compression is documented as the highest-priority v2 upgrade.
+
+**Problem discovered during evaluation:** The landmark detector correctly flags a turn as load-bearing when any sentence within it contains a slot signal or intent verb. The entire turn then survives verbatim — including sentences that are pure filler. For example:
+
+> *"An onboard bar! That sounds fun. Okay I'm going to go with Virgin I think. Although — hold on — what about the American Airlines one?"*
+
+This turn contains a booking decision ("go with Virgin") so is correctly flagged as a landmark. But the first sentence ("An onboard bar! That sounds fun.") is pure filler that adds noise to the context. Under turn-level compression, both survive together.
+
+**Measured impact:** Dry-run audits on both Taskmaster-2 and realistic synthetic conversations show that COMPRESS runs hold only ~11–33% of total tokens. Even compressing all non-landmark turns to zero, the maximum achievable token reduction is ~25–33% on these datasets. The 40–60% target assumes more compressible noise than either dataset contains at the turn level.
+
+**Why turn-level was correct for v1:**
+- Simpler to reason about and test — the unit of compression is the same unit as the conversation
+- Safe by default — no risk of splitting a landmark sentence from its context mid-turn
+- Sufficient to demonstrate the architecture and prove quality preservation
+
+**The v2 fix — sentence-level compression:**
+1. At load time (or at scoring time), split each turn into constituent sentences using sentence-boundary detection
+2. Score each sentence independently against the query using the same keyword + semantic + recency composite
+3. Classify sentences as KEEP or COMPRESS rather than whole turns
+4. Landmark sentences always KEEP; non-landmark sentences in the same turn can be compressed
+5. Reassemble kept sentences into the turn before assembling the thread
+
+**Expected impact of sentence-level compression:** Token reduction of 40–55% on realistic conversational data, with the same quality preservation guarantees. The landmark detection logic is unchanged — it still operates at turn level to identify which turns contain load-bearing content, but the compressor now has sub-turn granularity to discard the surrounding filler.
+
+**Estimated implementation effort:** 2–3 days. The scorer, assembler, and pipeline interfaces require minor extension; no architectural changes.
+
+---
+
 *Last updated: April 2026*
