@@ -1,8 +1,8 @@
 """
 Stage 4b — LLM Summarisation.
 
-Summarises a COMPRESS run (contiguous low-relevance turns) into
-a single concise summary string. One LLM call per run.
+Summarises a COMPRESS run into a concise summary string.
+Short or trivial runs are dropped rather than summarised.
 """
 
 from __future__ import annotations
@@ -13,6 +13,10 @@ from openai import OpenAI
 from src.ingestion.models import Turn
 
 _client: OpenAI | None = None
+
+# Minimum total characters in a COMPRESS run before we bother summarising.
+# Runs shorter than this are just dropped — they're pure filler.
+MIN_CHARS_TO_SUMMARISE = 80
 
 
 def _get_client() -> OpenAI:
@@ -30,36 +34,37 @@ def _format_turns(turns: list[Turn]) -> str:
     return "\n".join(lines)
 
 
+def _total_chars(turns: list[Turn]) -> int:
+    return sum(len(t.text.strip()) for t in turns)
+
+
 def summarise_run(
     turns: list[Turn],
     domain: str = "flights",
     model: str = "gpt-4o-mini",
 ) -> str:
     """
-    Summarise a contiguous run of low-relevance turns into 1-2 sentences.
+    Summarise a COMPRESS run into 1-2 sentences.
 
-    The summary preserves any constraints, options, or prices mentioned
-    in the run. It does not introduce new information.
+    Returns empty string if the run is too short to be worth summarising
+    (caller will drop it entirely from the output).
 
-    Args:
-        turns:  The turns in this COMPRESS run (non-empty).
-        domain: Conversation domain for context in the prompt.
-        model:  LLM model name (default gpt-4o-mini for cost efficiency).
-
-    Returns:
-        A 1-2 sentence summary string.
+    Only summarise if the run contains enough content to justify an LLM call —
+    trivial filler like "Okay." / "Sure." / "Hold on." is just dropped.
     """
     if not turns:
         return ""
 
-    # If run is a single very short filler turn, skip LLM call
-    if len(turns) == 1 and len(turns[0].text.strip()) < 20:
-        return turns[0].text.strip()
+    # Drop trivial runs — not worth an LLM call or a summary placeholder
+    if _total_chars(turns) < MIN_CHARS_TO_SUMMARISE:
+        return ""
 
     formatted = _format_turns(turns)
     prompt = f"""The following turns are from a {domain} booking conversation.
-Summarise them in 1-2 sentences. Preserve any constraints, options, prices, 
-or factual details mentioned. Do not invent anything not in the turns.
+Summarise in 1-2 concise sentences. Only include information that would be
+useful context for answering a question about this conversation later.
+Omit greetings, filler, and repeated content. If there is nothing meaningful
+to preserve, respond with exactly: SKIP
 
 Turns:
 {formatted}
@@ -71,6 +76,12 @@ Summary:"""
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
-        max_tokens=150,
+        max_tokens=80,
     )
-    return response.choices[0].message.content.strip()
+    result = response.choices[0].message.content.strip()
+
+    # If model says nothing meaningful, drop it
+    if result.upper() == "SKIP" or not result:
+        return ""
+
+    return result

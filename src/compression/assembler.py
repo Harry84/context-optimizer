@@ -1,12 +1,5 @@
 """
 Stage 4c — Thread Assembly & Integrity Check.
-
-Assembles the final [{role, content}] thread from KEEP runs
-and SUMMARY placeholders for COMPRESS runs.
-
-Enforces structural integrity:
-  - No consecutive same-role turns (merged)
-  - Thread must start with a user turn
 """
 
 from __future__ import annotations
@@ -37,8 +30,9 @@ def assemble(
     """
     Build the final [{role, content}] thread.
 
-    KEEP runs   → verbatim turns in chronological order.
-    COMPRESS runs → single synthetic assistant [SUMMARY: ...] turn.
+    KEEP runs    → verbatim turns in chronological order.
+    COMPRESS runs → single synthetic assistant [SUMMARY: ...] turn,
+                    or nothing if the summariser returned empty (trivial run).
     """
     stats = AssemblyStats()
     thread: list[dict] = []
@@ -56,7 +50,7 @@ def assemble(
             summary_text = summaries.get(id(turns), "")
             if summary_text:
                 thread.append({
-                    "role": "assistant",
+                    "role":    "assistant",
                     "content": f"[SUMMARY: {summary_text}]",
                 })
                 stats.summary_turns += 1
@@ -65,37 +59,62 @@ def assemble(
     thread, repairs = _integrity_check(thread)
     stats.integrity_repairs = repairs
 
-    if repairs > 0:
-        logger.debug("Assembly integrity: %d repair(s) made", repairs)
-
     return thread, stats
+
+
+def _is_substantially_contained(new: str, existing: str) -> bool:
+    """
+    Return True if new content is already substantially present in existing.
+    Used to avoid appending near-duplicate assistant turns.
+    """
+    new_clean      = new.strip().lower()
+    existing_clean = existing.strip().lower()
+    if not new_clean:
+        return True
+    # If the new content is a substring of existing, skip it
+    if new_clean in existing_clean:
+        return True
+    # If 80%+ of the words in new already appear in existing, skip it
+    new_words      = set(new_clean.split())
+    existing_words = set(existing_clean.split())
+    if new_words and len(new_words & existing_words) / len(new_words) >= 0.8:
+        return True
+    return False
 
 
 def _integrity_check(thread: list[dict]) -> tuple[list[dict], int]:
     """
-    Validate and repair structural issues in the assembled thread.
+    Validate and repair structural issues.
 
-    Repairs:
-    1. Consecutive same-role turns → merge content with a space
-    2. Thread starts with an assistant turn → prepend placeholder user turn
+    Rules:
+    1. Thread must start with a user turn.
+    2. Consecutive ASSISTANT turns → merge, skipping near-duplicate content.
+    3. Consecutive USER turns → insert a thin assistant bridge.
     """
     if not thread:
         return thread, 0
 
     repairs = 0
-
-    # Repair 1: merge consecutive same-role turns
     merged: list[dict] = []
+
     for msg in thread:
-        if merged and merged[-1]["role"] == msg["role"]:
-            # Only merge if content is meaningfully different
-            if msg["content"].strip() and msg["content"].strip() != merged[-1]["content"].strip():
-                merged[-1]["content"] += " " + msg["content"]
+        same_role = merged and merged[-1]["role"] == msg["role"]
+
+        if same_role and msg["role"] == "assistant":
+            new_content = msg["content"].strip()
+            if new_content and not _is_substantially_contained(new_content, merged[-1]["content"]):
+                merged[-1]["content"] += " " + new_content
             repairs += 1
+
+        elif same_role and msg["role"] == "user":
+            merged.append({"role": "assistant", "content": "[context continues]"})
+            merged.append({"role": msg["role"], "content": msg["content"]})
+            repairs += 1
+
         else:
             merged.append({"role": msg["role"], "content": msg["content"]})
 
-    # Repair 2: thread must not start with an assistant turn
+    # Thread must not start with an assistant turn
     if merged and merged[0]["role"] == "assistant":
         merged.insert(0, {"role": "user", "content": "[conversation start]"})
         repairs += 1
@@ -104,10 +123,7 @@ def _integrity_check(thread: list[dict]) -> tuple[list[dict], int]:
 
 
 def format_full_context(turns: list[Turn]) -> list[dict]:
-    """
-    Format a full list of turns as a [{role, content}] thread
-    with no compression. Used for the full-context baseline in evaluation.
-    """
+    """Format full turn list as [{role, content}] with no compression."""
     thread = [
         {"role": "user" if t.speaker == "USER" else "assistant", "content": t.text}
         for t in turns

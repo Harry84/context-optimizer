@@ -1,17 +1,12 @@
 """
 Stage 4a — Turn Classification & Run Grouping.
-
-After scoring, classifies each turn's disposition and groups
-contiguous same-disposition turns into runs for summarisation.
 """
 
 from __future__ import annotations
 
 from src.ingestion.models import OptimizerConfig, Turn
 
-
-# Type alias for clarity
-Run = tuple[str, list[Turn]]   # (disposition, [turns])
+Run = tuple[str, list[Turn]]
 
 
 def classify_turns(
@@ -26,21 +21,13 @@ def classify_turns(
         KEEP      — landmark turns (hard rule) or high relevance score
         CANDIDATE — moderate relevance; kept for structural integrity
         COMPRESS  — low relevance; will be summarised
-
-    Args:
-        history:    Scored history turns (0..Q-1).
-        query_type: "factual" | "analytical" | "preference"
-        config:     Contains per-query-type thresholds.
-
-    Returns:
-        Same list of turns with .disposition set.
     """
     high = config.thresholds[query_type]["high"]
     low  = config.thresholds[query_type]["low"]
 
     for turn in history:
         if turn.is_landmark:
-            turn.disposition = "KEEP"           # hard rule — always verbatim
+            turn.disposition = "KEEP"
         elif turn.score >= high:
             turn.disposition = "KEEP"
         elif turn.score >= low:
@@ -54,32 +41,61 @@ def classify_turns(
 def group_into_runs(turns: list[Turn]) -> list[Run]:
     """
     Group consecutive turns by disposition into contiguous runs.
+    CANDIDATE turns are treated as KEEP for grouping.
 
-    Each run is a tuple of (disposition, [turns]).
-    Runs are in strict chronological order.
-
-    CANDIDATE turns are treated as KEEP for grouping — they are
-    included verbatim but their run may be merged with adjacent KEEPs.
-
-    Example:
-        turns: KEEP KEEP COMPRESS COMPRESS KEEP COMPRESS COMPRESS
-        runs:  [("KEEP",     [t0, t1]),
-                ("COMPRESS", [t2, t3]),
-                ("KEEP",     [t4]),
-                ("COMPRESS", [t5, t6])]
-
-    Each COMPRESS run becomes one LLM summarisation call.
+    Adjacent COMPRESS runs are merged together so that larger sub-threads
+    are summarised in one LLM call rather than many small calls.
+    Single-turn COMPRESS runs are merged into adjacent COMPRESS runs where
+    possible, to avoid trivial LLM calls for single filler turns like "Okay."
     """
     if not turns:
         return []
 
+    # Initial grouping
     runs: list[Run] = []
     for turn in turns:
-        # Treat CANDIDATE as KEEP for grouping purposes
         effective = "KEEP" if turn.disposition in ("KEEP", "CANDIDATE") else "COMPRESS"
         if runs and runs[-1][0] == effective:
             runs[-1][1].append(turn)
         else:
-            runs.append((effective, [turn]))
+            runs.append((effective, list([turn])))
+
+    # Merge single-turn COMPRESS runs into adjacent COMPRESS runs
+    runs = _merge_singleton_compress_runs(runs)
 
     return runs
+
+
+def _merge_singleton_compress_runs(runs: list[Run]) -> list[Run]:
+    """
+    Merge single-turn COMPRESS runs with the nearest adjacent COMPRESS run.
+    If no adjacent COMPRESS run exists, keep it as-is.
+
+    This reduces the number of LLM summarisation calls without dropping
+    any content — single filler turns get absorbed into larger summaries.
+    """
+    if len(runs) <= 1:
+        return runs
+
+    merged: list[Run] = []
+    i = 0
+    while i < len(runs):
+        disposition, turns = runs[i]
+
+        if disposition == "COMPRESS" and len(turns) == 1:
+            # Try to merge with previous COMPRESS run
+            if merged and merged[-1][0] == "COMPRESS":
+                merged[-1][1].extend(turns)
+                i += 1
+                continue
+            # Try to merge with next COMPRESS run
+            if i + 1 < len(runs) and runs[i + 1][0] == "COMPRESS":
+                # Prepend to next run — handled on next iteration
+                runs[i + 1] = ("COMPRESS", turns + runs[i + 1][1])
+                i += 1
+                continue
+
+        merged.append((disposition, turns))
+        i += 1
+
+    return merged

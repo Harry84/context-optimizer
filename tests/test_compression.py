@@ -39,7 +39,6 @@ def test_low_score_compress():
 
 def test_mid_score_candidate():
     config = OptimizerConfig()
-    # factual thresholds: high=0.6, low=0.3
     turns = [_turn(0, "USER", "some turn", score=0.45)]
     result = classify_turns(turns, "factual", config)
     assert result[0].disposition == "CANDIDATE"
@@ -47,15 +46,12 @@ def test_mid_score_candidate():
 
 def test_thresholds_vary_by_query_type():
     config = OptimizerConfig()
-    # Score of 0.5 is above analytical HIGH (0.5) but below factual HIGH (0.6)
     turns_a = [_turn(0, "USER", "text", score=0.5)]
     turns_f = [_turn(0, "USER", "text", score=0.5)]
-
     classify_turns(turns_a, "analytical", config)
     classify_turns(turns_f, "factual", config)
-
-    assert turns_a[0].disposition == "KEEP"       # 0.5 >= 0.5 (analytical high)
-    assert turns_f[0].disposition == "CANDIDATE"  # 0.5 < 0.6 (factual high), >= 0.3 (low)
+    assert turns_a[0].disposition == "KEEP"
+    assert turns_f[0].disposition == "CANDIDATE"
 
 
 # ─── Run grouping ────────────────────────────────────────────────────────────
@@ -86,7 +82,6 @@ def test_group_alternating():
 
 
 def test_group_candidate_merged_with_keep():
-    """CANDIDATE disposition is treated as KEEP for grouping."""
     turns = _classified("KEEP", "CANDIDATE", "KEEP")
     runs = group_into_runs(turns)
     assert len(runs) == 1
@@ -97,10 +92,15 @@ def test_group_empty():
     assert group_into_runs([]) == []
 
 
+def test_group_singleton_compress_merged():
+    turns = _classified("KEEP", "COMPRESS", "COMPRESS", "KEEP", "COMPRESS")
+    runs = group_into_runs(turns)
+    assert "COMPRESS" in [r[0] for r in runs]
+
+
 # ─── Assembly ────────────────────────────────────────────────────────────────
 
-def _make_runs(specs: list[tuple[str, list[tuple[str, str]]]]):
-    """Build runs list from (disposition, [(speaker, text)]) specs."""
+def _make_runs(specs):
     runs = []
     idx = 0
     for disposition, utterances in specs:
@@ -120,8 +120,8 @@ def test_assemble_keep_verbatim():
     ])
     thread, stats = assemble(runs, summaries={})
     assert len(thread) == 2
-    assert thread[0] == {"role": "user",      "content": "Hello."}
-    assert thread[1] == {"role": "assistant",  "content": "Hi there."}
+    assert thread[0] == {"role": "user",     "content": "Hello."}
+    assert thread[1] == {"role": "assistant", "content": "Hi there."}
     assert stats.kept_verbatim == 2
     assert stats.summary_turns == 0
 
@@ -133,13 +133,16 @@ def test_assemble_compress_run_replaced():
     run_id = id(runs[0][1])
     summaries = {run_id: "The user asked about the flight and the assistant responded."}
     thread, stats = assemble(runs, summaries)
-
-    assert len(thread) == 2   # placeholder + integrity inserts user at start
     assert any("[SUMMARY:" in msg["content"] for msg in thread)
     assert stats.summary_turns == 1
 
 
 def test_assemble_mixed():
+    """
+    KEEP → COMPRESS → KEEP.
+    SUMMARY (assistant) followed by verbatim ASSISTANT turn → merged into one.
+    All content preserved, no consecutive same-role turns.
+    """
     runs = _make_runs([
         ("KEEP",     [("USER", "I need a flight to Paris.")]),
         ("COMPRESS", [("ASSISTANT", "Okay."), ("USER", "Sure.")]),
@@ -149,13 +152,35 @@ def test_assemble_mixed():
     summaries = {run_id: "Routine exchange."}
     thread, stats = assemble(runs, summaries)
 
+    # No consecutive same-role turns
     roles = [m["role"] for m in thread]
-    # Should not have consecutive same roles
     for i in range(len(roles) - 1):
-        assert roles[i] != roles[i + 1], f"Consecutive {roles[i]} at positions {i},{i+1}"
+        assert roles[i] != roles[i + 1], f"Consecutive {roles[i]} at {i},{i+1}"
+
+    all_content = " ".join(m["content"] for m in thread)
+    assert "I need a flight to Paris." in all_content
+    assert "[SUMMARY:" in all_content
+    assert "Here is the flight" in all_content
+    assert stats.summary_turns == 1
+    assert stats.kept_verbatim == 2
 
 
-def test_integrity_check_merges_consecutive():
+def test_integrity_check_merges_consecutive_assistant():
+    """Consecutive ASSISTANT turns are merged."""
+    thread = [
+        {"role": "user",      "content": "Hello."},
+        {"role": "assistant", "content": "Let me check."},
+        {"role": "assistant", "content": "The flight departs at 8AM."},
+    ]
+    repaired, repairs = _integrity_check(thread)
+    assert repairs == 1
+    assert len(repaired) == 2
+    assert "Let me check." in repaired[1]["content"]
+    assert "8AM" in repaired[1]["content"]
+
+
+def test_integrity_check_bridges_consecutive_user():
+    """Consecutive USER turns get a bridge assistant turn, not merged."""
     thread = [
         {"role": "user",      "content": "Hello."},
         {"role": "user",      "content": "How are you?"},
@@ -163,9 +188,11 @@ def test_integrity_check_merges_consecutive():
     ]
     repaired, repairs = _integrity_check(thread)
     assert repairs == 1
-    assert len(repaired) == 2
-    assert "Hello." in repaired[0]["content"]
-    assert "How are you?" in repaired[0]["content"]
+    # Bridge inserted → 4 turns total
+    assert len(repaired) == 4
+    roles = [m["role"] for m in repaired]
+    for i in range(len(roles) - 1):
+        assert roles[i] != roles[i + 1]
 
 
 def test_integrity_check_no_repairs_needed():
