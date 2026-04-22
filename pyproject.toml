@@ -15,6 +15,7 @@ dependencies = [
     "datasets>=2.19.0",
     "huggingface-hub>=0.23.0",
     "pytest>=8.0.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [project.optional-dependencies]

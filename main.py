@@ -14,6 +14,10 @@ import argparse
 import logging
 import sys
 
+# Load .env before anything else so OPENAI_API_KEY is available
+from dotenv import load_dotenv
+load_dotenv()
+
 from src.ingestion.loader import load_from_config
 from src.ingestion.models import OptimizerConfig
 from src.landmarks.detector import get_detector
@@ -51,9 +55,7 @@ def cmd_inspect(
     """
     Inspect compression on a single conversation.
 
-    dry_run=True: skip LLM summarisation — shows which turns would be kept
-    vs compressed, without making any API calls. Useful for verifying the
-    pipeline logic before spending API credits.
+    dry_run=True: show scoring/dispositions without LLM calls.
     """
     from src.scoring.scorer import score_turns
 
@@ -70,27 +72,24 @@ def cmd_inspect(
     print(f"Query:        {query}")
     print(f"Query type:   {classify_query(query)}")
 
-    # Detect landmarks
     detector = get_detector(config)
     detector.detect(conv)
 
-    # Full context baseline
     full_thread = full_context(conv, query_pos)
     print(f"\nFull context: {len(full_thread)} turns")
 
     if dry_run:
-        # Show scoring and disposition without calling the LLM
         print("\n--- DRY RUN (no LLM calls) ---")
-        history = conv.turns[:query_pos]
+        history    = conv.turns[:query_pos]
         query_type = classify_query(query)
 
-        scored = score_turns(history, query, query_pos, config)
+        scored     = score_turns(history, query, query_pos, config)
         classified = classify_turns(scored, query_type, config)
-        runs = group_into_runs(classified)
+        runs       = group_into_runs(classified)
 
-        keep = sum(1 for t in classified if t.disposition in ("KEEP", "CANDIDATE"))
+        keep          = sum(1 for t in classified if t.disposition in ("KEEP", "CANDIDATE"))
         compress_count = sum(1 for t in classified if t.disposition == "COMPRESS")
-        landmarks = sum(1 for t in classified if t.is_landmark)
+        landmarks     = sum(1 for t in classified if t.is_landmark)
         compress_runs = sum(1 for d, _ in runs if d == "COMPRESS")
 
         print(f"Landmarks detected: {landmarks}")
@@ -104,7 +103,6 @@ def cmd_inspect(
             print(f"  [{turn.disposition:>8}] [{turn.speaker[:4]}] (score={turn.score:.2f}){lm} {turn.text[:80]}")
 
     else:
-        # Full compression with LLM summarisation
         opt_thread, stats, latency = compress(conv, query, query_pos, config)
         print(f"Optimised:     {len(opt_thread)} turns | {latency:.0f}ms")
         print(f"Kept verbatim: {stats.kept_verbatim} | Summaries: {stats.summary_turns} | Repairs: {stats.integrity_repairs}")
@@ -128,7 +126,7 @@ def cmd_evaluate(config: OptimizerConfig) -> None:
 
     eval_queries: dict[str, list[EvalQuery]] = {}
     for conv in eval_convs:
-        n = len(conv.turns)
+        n     = len(conv.turns)
         q_pos = max(5, int(n * 0.75))
         eval_queries[conv.conversation_id] = [
             EvalQuery(
@@ -144,14 +142,14 @@ def cmd_evaluate(config: OptimizerConfig) -> None:
         ]
 
     results_df = evaluate(eval_convs, eval_queries, config)
-    out_path = "eval_results.csv"
+    out_path   = "eval_results.csv"
     results_df.to_csv(out_path, index=False)
     print(f"\nResults saved to {out_path}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Context Optimizer")
-    sub = parser.add_subparsers(dest="command")
+    sub    = parser.add_subparsers(dest="command")
 
     sub.add_parser("stats", help="Show corpus statistics")
 
@@ -170,8 +168,7 @@ def main() -> None:
     parser.add_argument("--summariser", default="gpt-4o-mini")
     parser.add_argument("--judge",      default="gpt-4o")
 
-    args = parser.parse_args()
-
+    args   = parser.parse_args()
     config = OptimizerConfig(
         data_path=args.data_path,
         min_turns=args.min_turns,

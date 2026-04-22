@@ -12,3 +12,8 @@ wheels/
 # Data
 data/
 
+# Environment variables — never commit API keys
+.env
+
+# Evaluation outputs
+eval_results.csv
