@@ -62,24 +62,36 @@ def assemble(
     return thread, stats
 
 
-def _is_substantially_contained(new: str, existing: str) -> bool:
+def _smart_merge(existing: str, new: str) -> str:
     """
-    Return True if new content is already substantially present in existing.
-    Used to avoid appending near-duplicate assistant turns.
+    Merge two strings intelligently:
+    - If new is already contained in existing → keep existing unchanged
+    - If existing is contained in new → replace with new (new is a superset)
+    - If 80%+ of new's words are in existing → skip (near-duplicate)
+    - Otherwise → append new to existing
     """
-    new_clean      = new.strip().lower()
-    existing_clean = existing.strip().lower()
-    if not new_clean:
-        return True
-    # If the new content is a substring of existing, skip it
-    if new_clean in existing_clean:
-        return True
-    # If 80%+ of the words in new already appear in existing, skip it
-    new_words      = set(new_clean.split())
-    existing_words = set(existing_clean.split())
+    existing_l = existing.strip().lower()
+    new_l      = new.strip().lower()
+
+    if not new_l:
+        return existing
+
+    # New is a substring of existing — already have it
+    if new_l in existing_l:
+        return existing
+
+    # Existing is a substring of new — new is a superset, replace
+    if existing_l in new_l:
+        return new.strip()
+
+    # Near-duplicate word overlap check
+    new_words      = set(new_l.split())
+    existing_words = set(existing_l.split())
     if new_words and len(new_words & existing_words) / len(new_words) >= 0.8:
-        return True
-    return False
+        return existing
+
+    # Genuinely new content — append
+    return existing.strip() + " " + new.strip()
 
 
 def _integrity_check(thread: list[dict]) -> tuple[list[dict], int]:
@@ -88,7 +100,7 @@ def _integrity_check(thread: list[dict]) -> tuple[list[dict], int]:
 
     Rules:
     1. Thread must start with a user turn.
-    2. Consecutive ASSISTANT turns → merge, skipping near-duplicate content.
+    2. Consecutive ASSISTANT turns → smart merge (deduplicates substrings).
     3. Consecutive USER turns → insert a thin assistant bridge.
     """
     if not thread:
@@ -101,9 +113,7 @@ def _integrity_check(thread: list[dict]) -> tuple[list[dict], int]:
         same_role = merged and merged[-1]["role"] == msg["role"]
 
         if same_role and msg["role"] == "assistant":
-            new_content = msg["content"].strip()
-            if new_content and not _is_substantially_contained(new_content, merged[-1]["content"]):
-                merged[-1]["content"] += " " + new_content
+            merged[-1]["content"] = _smart_merge(merged[-1]["content"], msg["content"])
             repairs += 1
 
         elif same_role and msg["role"] == "user":
