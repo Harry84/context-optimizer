@@ -16,6 +16,8 @@ dependencies = [
     "huggingface-hub>=0.23.0",
     "pytest>=8.0.0",
     "python-dotenv>=1.0.0",
+    "langchain-text-splitters>=1.1.2",
+    "nltk>=3.9.4",
 ]
 
 [project.optional-dependencies]

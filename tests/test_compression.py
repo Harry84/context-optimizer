@@ -25,6 +25,7 @@ def test_landmark_always_keep():
 
 def test_high_score_keep():
     config = OptimizerConfig()
+    # 0.8 is above factual high threshold (0.72)
     turns = [_turn(0, "USER", "flight to Paris", score=0.8)]
     result = classify_turns(turns, "factual", config)
     assert result[0].disposition == "KEEP"
@@ -32,6 +33,7 @@ def test_high_score_keep():
 
 def test_low_score_compress():
     config = OptimizerConfig()
+    # 0.05 is below factual low threshold (0.45)
     turns = [_turn(0, "ASSISTANT", "Okay.", score=0.05)]
     result = classify_turns(turns, "factual", config)
     assert result[0].disposition == "COMPRESS"
@@ -39,15 +41,17 @@ def test_low_score_compress():
 
 def test_mid_score_candidate():
     config = OptimizerConfig()
-    turns = [_turn(0, "USER", "some turn", score=0.45)]
+    # 0.55 is between factual low (0.45) and high (0.72)
+    turns = [_turn(0, "USER", "some turn", score=0.55)]
     result = classify_turns(turns, "factual", config)
     assert result[0].disposition == "CANDIDATE"
 
 
 def test_thresholds_vary_by_query_type():
+    """Score 0.68 is above analytical high (0.65) but below factual high (0.72)."""
     config = OptimizerConfig()
-    turns_a = [_turn(0, "USER", "text", score=0.5)]
-    turns_f = [_turn(0, "USER", "text", score=0.5)]
+    turns_a = [_turn(0, "USER", "text", score=0.68)]
+    turns_f = [_turn(0, "USER", "text", score=0.68)]
     classify_turns(turns_a, "analytical", config)
     classify_turns(turns_f, "factual", config)
     assert turns_a[0].disposition == "KEEP"
@@ -152,7 +156,6 @@ def test_assemble_mixed():
     summaries = {run_id: "Routine exchange."}
     thread, stats = assemble(runs, summaries)
 
-    # No consecutive same-role turns
     roles = [m["role"] for m in thread]
     for i in range(len(roles) - 1):
         assert roles[i] != roles[i + 1], f"Consecutive {roles[i]} at {i},{i+1}"
@@ -166,7 +169,6 @@ def test_assemble_mixed():
 
 
 def test_integrity_check_merges_consecutive_assistant():
-    """Consecutive ASSISTANT turns are merged."""
     thread = [
         {"role": "user",      "content": "Hello."},
         {"role": "assistant", "content": "Let me check."},
@@ -180,7 +182,6 @@ def test_integrity_check_merges_consecutive_assistant():
 
 
 def test_integrity_check_bridges_consecutive_user():
-    """Consecutive USER turns get a bridge assistant turn, not merged."""
     thread = [
         {"role": "user",      "content": "Hello."},
         {"role": "user",      "content": "How are you?"},
@@ -188,7 +189,6 @@ def test_integrity_check_bridges_consecutive_user():
     ]
     repaired, repairs = _integrity_check(thread)
     assert repairs == 1
-    # Bridge inserted → 4 turns total
     assert len(repaired) == 4
     roles = [m["role"] for m in repaired]
     for i in range(len(roles) - 1):
