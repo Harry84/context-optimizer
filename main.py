@@ -6,9 +6,10 @@ Usage:
     python main.py inspect --conv-id dlg-xxx --query "..." --query-pos 50
     python main.py inspect --conv-id dlg-xxx --query "..." --query-pos 50 --dry-run
     python main.py inspect --conv-id dlg-xxx --query "..." --query-pos 50 --compare
-    python main.py --compression-strategy sentence inspect --conv-id dlg-xxx --query "..." --query-pos 50 --dry-run
+    python main.py --compression-strategy sentence inspect --conv-id dlg-xxx --query "..." --query-pos 50
+    python main.py --compression-strategy topk inspect --conv-id dlg-xxx --query "..." --query-pos 50
     python main.py evaluate
-    python main.py --compression-strategy sentence evaluate
+    python main.py --compression-strategy topk evaluate
 """
 
 from __future__ import annotations
@@ -142,6 +143,23 @@ def cmd_inspect(
                 for t in run_turns:
                     lm = " [LM]" if t.is_landmark else ""
                     print(f"  [{disposition:>8}] [{t.speaker[:4]}] (score={t.score:.2f}){lm} {t.text[:75]}")
+        elif config.compression_strategy == "topk":
+            from src.compression.topk_compressor import classify_turns_topk
+            classified     = classify_turns_topk(scored, query_type, config)
+            runs           = group_into_runs(classified)
+            keep           = sum(1 for t in classified if t.disposition in ("KEEP", "CANDIDATE"))
+            compress_count = sum(1 for t in classified if t.disposition == "COMPRESS")
+            landmarks      = sum(1 for t in classified if t.is_landmark)
+            compress_runs  = sum(1 for d, _ in runs if d == "COMPRESS")
+            k              = config.topk_k[query_type]
+            print(f"Landmarks detected: {landmarks}  |  K={k} non-landmark turns kept")
+            print(f"Turns to KEEP:      {keep}")
+            print(f"Turns to COMPRESS:  {compress_count} ({compress_runs} runs → {compress_runs} LLM calls)")
+            print(f"Est. token reduction: ~{100*compress_count/len(history):.0f}%")
+            print("\n--- PER-TURN DISPOSITIONS ---")
+            for turn in classified:
+                lm = f" [{turn.landmark_type.upper()}]" if turn.is_landmark else ""
+                print(f"  [{turn.disposition:>8}] [{turn.speaker[:4]}] (score={turn.score:.2f}){lm} {turn.text[:80]}")
         else:
             classified     = classify_turns(scored, query_type, config)
             runs           = group_into_runs(classified)
@@ -218,8 +236,8 @@ def main() -> None:
     parser.add_argument("--summariser",  default="gpt-4o-mini")
     parser.add_argument("--judge",       default="gpt-4o")
     parser.add_argument("--compression-strategy", default="turn",
-                        choices=["turn", "sentence"],
-                        help="turn=v1 whole-turn compression, sentence=v2 sub-turn sentence compression")
+                        choices=["turn", "sentence", "topk"],
+                        help="turn=v1 threshold-based, sentence=v2 sentence-level, topk=v3 top-K retrieval")
 
     args   = parser.parse_args()
     config = OptimizerConfig(

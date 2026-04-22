@@ -8,6 +8,7 @@ the conversation, and returns an optimised [{role, content}] thread.
 Compression strategy is selected via config.compression_strategy:
   "turn"     — v1 turn-level (compressor.py)
   "sentence" — v2 sentence-level (sentence_compressor.py)
+  "topk"     — v3 top-K retrieval (topk_compressor.py)
 """
 
 from __future__ import annotations
@@ -33,15 +34,13 @@ def compress(
     Full compression pipeline for a single (conversation, query) pair.
 
     Only turns[0..query_position-1] are used as context.
-    Turn at query_position is the current query being answered.
-    Turns after query_position are ignored (not yet in history).
     """
     assert query_position > 0, "query_position must be > 0 (need at least one history turn)"
     assert query_position <= len(conversation.turns), "query_position out of range"
 
     t_start = time.perf_counter()
 
-    # 1. Landmark detection (idempotent — safe to call multiple times)
+    # 1. Landmark detection (idempotent)
     detector = get_detector(config)
     detector.detect(conversation)
 
@@ -69,7 +68,11 @@ def compress(
             query_type=query_type,
             config=config,
         )
+    elif config.compression_strategy == "topk":
+        from src.compression.topk_compressor import topk_runs
+        runs = topk_runs(scored_history, query_type, config)
     else:
+        # Default: v1 turn-level
         classified = classify_turns(scored_history, query_type, config)
         runs = group_into_runs(classified)
 

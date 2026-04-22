@@ -43,9 +43,11 @@ class OptimizerConfig:
     landmark_detector: str = "rules"    # "rules" | "embedding" | "llm"
 
     # Compression strategy
-    # "turn"     — v1: classify and compress whole turns (fast, safe)
-    # "sentence" — v2: split landmark turns into sentences, only KEEP
-    #              the landmark sentences, compress the filler around them
+    # "turn"     — v1: threshold-based turn-level classification
+    # "sentence" — v2: sentence-level classification within landmark turns
+    # "topk"     — v3: top-K retrieval — keep the K most relevant non-landmark
+    #              turns, compress the rest. Guaranteed token reduction regardless
+    #              of landmark density.
     compression_strategy: str = "turn"
 
     # Query classification
@@ -68,14 +70,22 @@ class OptimizerConfig:
     })
 
     # Sentence-level compression thresholds (v2 strategy).
-    # Tighter than turn-level because individual sentences have less context,
-    # making semantic similarity scores noisier — we need a higher bar to
-    # avoid keeping weak-signal filler sentences.
     sentence_thresholds: dict = field(default_factory=lambda: {
         "factual":    {"high": 0.80, "low": 0.60},
         "analytical": {"high": 0.75, "low": 0.55},
         "preference": {"high": 0.70, "low": 0.50},
     })
+
+    # Top-K retrieval settings (v3 strategy).
+    # K = max number of non-landmark turns to keep verbatim.
+    # topk_min_score = floor below which turns are always COMPRESSed
+    # regardless of K — prevents low-quality noise making it into top K.
+    topk_k: dict = field(default_factory=lambda: {
+        "factual":    6,
+        "analytical": 12,
+        "preference": 8,
+    })
+    topk_min_score: float = 0.30
 
     # Model names
     embedding_model: str = "all-MiniLM-L6-v2"
