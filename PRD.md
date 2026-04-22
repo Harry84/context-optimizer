@@ -1,7 +1,7 @@
 # Product Requirements Document
 ## Intelligent Context Optimizer for Multi-Turn Agents
 
-**Version:** 0.3  
+**Version:** 0.5  
 **Date:** April 2026  
 **Status:** Approved for Architecture Phase
 
@@ -9,7 +9,9 @@
 
 ## 1. Problem Statement
 
-LLM agents operating over long conversations face a hard trade-off: include the full history and waste tokens on noise, or truncate naively and lose critical context. Neither is acceptable in production. This system solves it by intelligently selecting and compressing the conversation history sent to the model for each query — reducing cost and improving signal-to-noise without degrading answer quality.
+LLM agents operating over long conversations face a hard trade-off: include the full history and waste tokens on noise, or truncate naively and lose critical context. Neither is acceptable in production. This system solves it by intelligently selecting and compressing conversation history sent to the model for each query — reducing cost and improving signal-to-noise without degrading answer quality.
+
+The target application is LEC (London Export Corporation), where customer service agents handle multi-turn enquiries involving trade logistics, order tracking, complaints, and onboarding. These conversations are long, topic-shifting, and require the agent to track the customer's evolving intent across many turns.
 
 ---
 
@@ -20,247 +22,213 @@ LLM agents operating over long conversations face a hard trade-off: include the 
 | Context reduction | 40–60% token reduction vs. naive full-history |
 | Quality preservation | Optimised context scores ≥ full context on LLM-as-judge rubric |
 | Semantic preservation | BERTScore F1 ≥ 0.85 between full-context and optimised-context answers |
-| Structural correctness | No broken tool-call chains, no orphaned turns in output |
+| Structural correctness | No orphaned turns in output; valid role alternation maintained |
 | Measurability | Evaluation across ≥10 conversations; report token %, quality score, BERTScore, latency |
 
-**Non-goals (v1):** streaming assembly for 1000+ turns, fine-tuned landmark classifiers, production serving infrastructure, multi-path branch evaluation.
+**Non-goals (v1):** streaming assembly, fine-tuned classifiers, production serving infrastructure, multi-path evaluation, synthetic LEC data generation.
 
 ---
 
-## 3. Dataset & Preprocessing
+## 3. Phased Approach
 
-**Source:** OpenAssistant/oasst1 (~137MB JSONL, ~84k message rows, downloaded locally at `data/oasst1.jsonl`).
+### Phase 1 — Proof of Concept on Taskmaster-2 Flights (this submission)
+Demonstrate the full optimizer pipeline on real task-oriented dialogues. This proves:
+- The architecture is sound and measurably correct on real multi-turn data
+- Landmark detection (stated intents, decisions, action items) works and can be evaluated against ground-truth slot annotations
+- Adaptive compression produces meaningful token reduction without quality loss
+- The evaluation framework produces honest, reproducible numbers
 
-The dataset is a flat list of message nodes — not pre-assembled conversations. Each row contains:
-- `message_id`, `parent_id` — tree linkage
-- `role` — `prompter` or `assistant`
-- `text` — message content
-- `lang` — language tag
-- `rank`, `rank_end` — human preference ranking among sibling branches
-- Various quality metadata fields
+**Why Taskmaster-2 flights:** 1,692 conversations ≥20 turns, mean 30 turns, max 85. Full USER/ASSISTANT turn structure preserved. Slot annotations per utterance provide ground truth for landmark detection. Conversation structure — goal establishment, multi-option comparison, constraint evolution, final decision — is directly analogous to LEC trade logistics enquiries.
 
-### 3.1 Tree Reconstruction Pipeline
-
-Conversation trees must be explicitly reconstructed before any context optimisation can occur:
-
-1. Parse JSONL into a message store keyed by `message_id`
-2. Build parent→children adjacency from `parent_id` links; root nodes have `parent_id = null`
-3. At each branching point, select the **highest-ranked child** (lowest `rank` value per OASST1 convention) — this gives one canonical linear thread per tree
-4. Walk each tree depth-first along the highest-ranked path, materialising a linear sequence of turns
-5. Filter to threads with **≥50 turns** — this is the working corpus
-6. Normalise each turn to `{turn_index, role, content, message_id, metadata}`
-
-**Branching strategy rationale:** OASST1 trees branch at many nodes (multiple human responses, multiple assistant responses). For v1 we take the single highest-ranked path per tree. This keeps tree reconstruction simple and unambiguous while still producing naturalistic, high-quality multi-turn conversations. Multi-path evaluation is deferred to future work.
-
-**Expected yield:** OASST1 contains ~9k conversation trees. The majority of deep threads are English multi-turn exchanges. We anticipate 50–200 threads meeting the ≥50 turn threshold after filtering.
+### Phase 2 — LEC Domain Adaptation (future work)
+Adapt to LEC customer service conversations using a small set of synthetically generated dialogues. Introduces LEC-specific landmark taxonomy (`track_order`, `raise_complaint`, `request_quote`, `confirm_booking`, `escalate_issue`) and action/commitment detection. The pipeline is dataset-agnostic — Phase 2 requires only new data and updated landmark labels, not architectural changes.
 
 ---
 
-## 4. System Architecture Overview
+## 4. Dataset & Preprocessing
 
-The system runs as four sequential stages:
+**Source:** Google Research Taskmaster-2, flights domain (`data/taskmaster2/flights.json`).  
+**Format:** Per-conversation JSON objects with `conversation_id`, `instruction_id`, and `utterances` array.  
+**Each utterance:** `speaker` (USER/ASSISTANT), `text`, `segments` (slot annotations with span indices).
+
+### 4.1 Preprocessing Pipeline
+
+1. Load `flights.json` — no tree reconstruction required, conversations are pre-structured linear sequences
+2. Filter to conversations with **≥20 turns**
+3. Normalise each turn to `{turn_index, speaker, text, slots[], is_landmark}`
+4. Pre-compute slot presence per turn from `segments` annotations — used as ground truth for landmark evaluation
+
+**Turn threshold rationale:** Task-oriented dialogues are informationally denser than casual chat. A 20-turn flight booking conversation contains as much load-bearing context as 40+ turns of general conversation. Only 1.5% of Taskmaster-2 conversations reach 50 turns; the 50-turn figure in the assignment was written with chat-style data in mind. Documented in `key_decisions.md` (KD-002).
+
+---
+
+## 5. System Architecture Overview
 
 ```
-Raw JSONL
+flights.json
     │
     ▼
-[Stage 1] Ingestion & Tree Reconstruction
-    │  Reconstruct trees, select highest-ranked path,
-    │  filter ≥50 turns, normalise to Conversation objects
+[Stage 1] Ingestion & Normalisation
+    │  Load, filter ≥20 turns, normalise to Conversation objects
+    │  Pre-compute slot presence as landmark ground truth
     ▼
 [Stage 2] Relevance Scoring Engine
-    │  Per-message composite score against current query:
-    │  keyword match + semantic similarity + recency decay + landmark boost
-    │  + query type classification (factual / analytical / preference)
+    │  Classify query: factual / analytical / preference
+    │  Per-turn composite score against query:
+    │    keyword match + semantic similarity + recency decay + landmark boost
     ▼
-[Stage 3] Compression & Assembly
-    │  High-score messages → kept verbatim
-    │  Landmarks & tool-call turns → always verbatim (hard rule)
-    │  Low-score sub-threads → LLM-summarised into [summary] turns
-    │  Enforce chronological order + referential integrity
+[Stage 3] Landmark Detection & Compression
+    │  Detect: stated intents, decisions, action items
+    │  Landmark turns → verbatim (hard rule, overrides score)
+    │  High-score turns → verbatim
+    │  Low-score runs → LLM-summarised [SUMMARY] turns
+    │  Assemble: chronological order, valid role alternation
     ▼
 [Stage 4] Evaluation Harness
-       Full-context vs. optimised-context → LLM-as-judge + BERTScore
-       Report: token reduction %, quality score, semantic preservation, latency
+       Full-context vs. optimised-context answers
+       Metrics: token reduction %, LLM-as-judge (4 dimensions),
+                BERTScore F1, landmark recall, assembly latency
 ```
 
 ---
 
-## 5. Functional Requirements
+## 6. Functional Requirements
 
-### 5.1 Must Have
+### 6.1 Must Have
 
 | ID | Requirement |
 |---|---|
-| FR-01 | Reconstruct OASST1 conversation trees from flat JSONL; select highest-ranked path at each branch |
-| FR-02 | Filter corpus to threads ≥50 turns; persist as structured Conversation objects |
+| FR-01 | Load Taskmaster-2 flights; filter ≥20 turns; normalise to Conversation objects |
+| FR-02 | Pre-compute slot presence per turn from segment annotations (landmark ground truth) |
 | FR-03 | Accept `(conversation, query)` as input; return optimised conversation thread |
 | FR-04 | Composite relevance scoring: keyword match + semantic similarity + recency decay + landmark boost |
-| FR-05 | Local embeddings via `sentence-transformers` (`all-MiniLM-L6-v2`) for semantic similarity — no API cost |
-| FR-06 | LLM-based summarisation of low-relevance sub-threads into synthetic `[SUMMARY: …]` turns |
-| FR-07 | Verbatim preservation of landmark turns (decisions, commitments, action items) and any tool-call turns |
-| FR-08 | Output passes structural integrity check: valid role alternation, no orphaned turns, no broken references |
-| FR-09 | Evaluation framework reporting token reduction %, LLM-as-judge quality, BERTScore F1, and latency across ≥10 conversations |
-| FR-10 | Demonstrate optimised context mean quality ≥ full context mean quality across eval set |
-| FR-11 | **Adaptive compression strategy:** classify each query as factual / analytical / preference and apply strategy-specific thresholds and compression rules |
-| FR-12 | **Landmark detection:** identify and tag messages containing decisions, commitments, stated intents, and action items; preserve these verbatim regardless of relevance score |
+| FR-05 | Local embeddings via `sentence-transformers/all-MiniLM-L6-v2` — no API cost |
+| FR-06 | **Landmark detection:** identify and preserve stated intents, decisions, and action items verbatim |
+| FR-07 | **Adaptive compression:** classify query as factual / analytical / preference; apply strategy-specific scoring weights and thresholds |
+| FR-08 | LLM-based summarisation of low-relevance sub-threads into `[SUMMARY: …]` turns |
+| FR-09 | Output passes structural integrity check: valid role alternation, no orphaned turns |
+| FR-10 | Evaluation: token reduction %, LLM-as-judge (4-dimension rubric), BERTScore F1, landmark detection recall vs. slot annotations, latency — across ≥10 conversations |
+| FR-11 | Prove optimised context mean quality ≥ full context mean quality |
 
-### 5.2 Stretch Goals
+### 6.2 Stretch Goals
 
 | ID | Requirement |
 |---|---|
-| FR-13 | Net cost analysis: track summarisation LLM call cost vs. tokens saved — report whether optimisation is net-positive |
-| FR-14 | 500-message stress test with documented failure modes and latency profile |
+| FR-12 | Net cost analysis: summarisation LLM cost vs. tokens saved |
+| FR-13 | Extended evaluation on hotels + restaurant-search domains |
+| FR-14 | Phase 2: synthetic LEC conversations with action/commitment detection |
 
 ---
 
-## 6. Relevance Scoring Detail
+## 7. Relevance Scoring
 
-Each message receives a composite score `S(m, q)` against the current query `q`:
+Each turn receives a composite score `S(t, q)` against the current query `q`:
 
 ```
-S(m, q) = w1·keyword(m,q) + w2·semantic(m,q) + w3·recency(m) + landmark_boost(m)
+S(t, q) = w1·keyword(t,q) + w2·semantic(t,q) + w3·recency(t) + landmark_boost(t)
 ```
 
 | Signal | Method | Notes |
 |---|---|---|
 | **Keyword match** | TF-IDF weighted token overlap | Higher weight for rare terms |
-| **Semantic similarity** | Cosine similarity, `all-MiniLM-L6-v2` embeddings | Run locally, no API cost |
+| **Semantic similarity** | Cosine similarity, `all-MiniLM-L6-v2` | Local, no API cost |
 | **Recency decay** | `exp(-λ · (N - turn_index))`, λ=0.05 initial | Tunable; recent turns score higher |
-| **Landmark boost** | +0.3 if message classified as landmark | Binary; regex heuristics in v1 |
+| **Landmark boost** | +0.3 if turn classified as landmark | Binary; overrides low score in assembly |
 
-Weights `w1, w2, w3` are tunable per query type (see §7).
+Weights `w1, w2, w3` adjusted per query type (§8).
 
 ---
 
-## 7. Adaptive Compression Strategy
+## 8. Adaptive Compression Strategy
 
-Query type is classified before scoring. This classification drives threshold and weight adjustments:
+Query classified before scoring; drives weight and threshold adjustments:
 
-| Query Type | Detection Signal | Compression Behaviour |
+| Query Type | Detection Signals | Compression Behaviour |
 |---|---|---|
-| **Factual** | Wh-questions, specific entity references, date/number queries | Conservative: lower compression, high semantic weight — facts can be buried anywhere in history |
-| **Analytical** | "why", "how", "compare", "explain", reasoning keywords | Moderate: landmark-heavy — decisions and reasoning chains preserved, filler compressed aggressively |
-| **Preference** | "what do you think", "which would you recommend", user preference phrases | Aggressive recency: recent turns dominate, older context deprioritised unless landmark |
-
-Classification is performed by a lightweight LLM call (or rule-based classifier as fallback) at the start of each optimisation request.
+| **Factual** | Wh-questions, entity/date references, "what/when/where" | Conservative — high semantic weight; landmarks anywhere in history preserved |
+| **Analytical** | "why", "how", "compare", "explain", reasoning keywords | Moderate — preserve reasoning chains and comparisons; compress filler aggressively |
+| **Preference** | "which would you", "recommend", "best option" | Recency-heavy — recent turns dominate; older context deprioritised unless landmark |
 
 ---
 
-## 8. Landmark Detection
+## 9. Landmark Detection
 
-Landmark messages are preserved verbatim regardless of relevance score. In v1, detection uses regex heuristics across the following categories:
+Landmark turns are preserved verbatim regardless of relevance score. Three categories per the assignment specification:
 
-| Category | Example Trigger Phrases |
-|---|---|
-| **Decision** | "we decided", "going with", "final answer is", "let's do", "I've chosen" |
-| **Commitment** | "I will", "I'll make sure", "you can count on", "I promise", "by [date]" |
-| **Stated intent** | "my goal is", "I want to", "I'm planning to", "the objective is" |
-| **Action item** | "action item:", "TODO:", "next step:", "follow up on", "don't forget" |
+| Category | Definition | Detection Method | Ground Truth Available |
+|---|---|---|---|
+| **Stated intents** | User establishes or shifts their goal | Slot-annotated USER turns (`flight_search.*` slots) + pattern matching | ✅ Taskmaster-2 slot annotations |
+| **Decisions** | User or assistant confirms a choice | Confirmation patterns on slot-bearing turns; `flight1_detail.*` slots | ✅ Taskmaster-2 slot annotations |
+| **Action items** | Assistant commits to an action | Pattern matching on ASSISTANT turns ("I'll book", "let me send", "I will") | ❌ No slot annotations; pattern-based only |
 
-Landmark classification is a binary flag. Future work: replace heuristics with a fine-tuned classifier or small LLM pass.
-
----
-
-## 9. Compression & Assembly Rules
-
-1. Messages with `S(m, q) ≥ high_threshold` → included verbatim
-2. Messages classified as landmarks → included verbatim (overrides score)
-3. Messages containing tool calls or tool results → included verbatim (hard rule)
-4. Contiguous runs of low-score messages → collapsed into a single `[SUMMARY: …]` assistant turn via LLM call
-5. Final thread must:
-   - Maintain strict chronological (turn index) order
-   - Alternate roles correctly (prompter / assistant)
-   - Replace any dropped message referenced by a later kept message with a summary placeholder
+Slot annotations cover stated intents and decisions with ground truth — landmark detection recall can be measured against them. Action items require pattern-based detection on assistant turns; this is noted as a limitation in the evaluation report.
 
 ---
 
-## 10. Evaluation Design
+## 10. Compression & Assembly Rules
 
-### 10.1 LLM-as-Judge — Rubric & Bias Mitigation
+1. Landmark turns (any category) → verbatim, always
+2. Turns with `S(t, q) ≥ high_threshold` → verbatim
+3. Contiguous runs of low-score, non-landmark turns → single `[SUMMARY: …]` turn via LLM
+4. Final thread: strict chronological order, valid USER/ASSISTANT alternation, no dropped turns without summary placeholder
 
-LLM-as-judge is used for quality scoring but is implemented carefully to address known failure modes:
+---
 
-**Known failure modes addressed:**
+## 11. Evaluation Design
 
-| Bias | Mitigation |
-|---|---|
-| Positional bias (favours first answer seen) | Each pair evaluated twice with order swapped; scores averaged |
-| Verbosity bias (longer = better) | Rubric dimensions are scored independently; length is not a dimension |
-| Self-serving bias (model favours its own output) | Judge model differs from generation model where possible |
-| Inconsistency across runs | Temperature=0 for judge; same prompt template every time |
+### 11.1 LLM-as-Judge Rubric
 
-**Rubric (scored 1–10 per dimension, independently):**
+**Bias mitigations:** order-swap (each pair evaluated twice, scores averaged), temperature=0, different judge model from generation model.
+
+**Rubric (1–10 per dimension, independently scored):**
 
 | Dimension | What is assessed |
 |---|---|
 | **Correctness** | Are factual claims accurate relative to the conversation? |
 | **Completeness** | Does the answer address all parts of the query? |
-| **Decision consistency** | Does the answer respect commitments and decisions made earlier in the conversation? |
-| **Hallucination** | Does the answer introduce information not grounded in context? (10 = no hallucination) |
+| **Landmark consistency** | Does the answer respect stated intents, decisions, and action items? |
+| **Hallucination** | Does the answer introduce ungrounded information? (10 = none) |
 
-Final quality score = mean of four dimensions.
+### 11.2 Additional Metrics
 
-### 10.2 Semantic Preservation (Objective Metric)
-
-To provide an LLM-independent measure of whether the optimised context preserves the semantic content of the full-context answer:
-
-- Generate answer `A_full` using full conversation history
-- Generate answer `A_opt` using optimised context
-- Compute **BERTScore F1** between `A_full` and `A_opt`
-- Threshold: BERTScore F1 ≥ 0.85 indicates acceptable semantic preservation
-
-BERTScore is deterministic, does not require an API call after initial model load, and is well-validated in the NLP literature for semantic similarity. It measures token-level alignment using contextual embeddings rather than surface overlap, making it robust to paraphrasing.
-
-### 10.3 Conversations & Queries
-
-**Conversations:** ≥10 reconstructed threads, varied length (50–200+ turns) and topic domain  
-**Queries:** 2–3 multi-step queries per conversation; one factual, one analytical, one preference where possible
-
-### 10.4 Results Table
-
-| Conv | Turns | Full Tokens | Opt Tokens | Reduction % | Full Quality | Opt Quality | Δ Quality | BERTScore F1 | Latency (ms) |
-|---|---|---|---|---|---|---|---|---|---|
-| conv_001 | 67 | 12,400 | 6,800 | 45% | 8.4 | 8.6 | +0.2 | 0.91 | 340 |
-| … | | | | | | | | | |
-
-**Acceptance bar:** optimised context mean quality ≥ full context mean quality, AND mean BERTScore F1 ≥ 0.85. Cases where optimised underperforms are reported, not hidden.
-
----
-
-## 11. Embedding & Model Choices
-
-| Component | v1 Choice | Rationale |
-|---|---|---|
-| Embeddings | `sentence-transformers/all-MiniLM-L6-v2` (local) | Free, fast, no API cost, well-validated for retrieval-style similarity |
-| Keyword scoring | TF-IDF via `scikit-learn` | Lightweight, deterministic, no external calls |
-| Summarisation LLM | OpenAI-compatible API (configurable via env var) | Quality matters; cost tracked for net cost analysis |
-| Judge LLM | OpenAI-compatible API, different model from generation where possible | Reduces self-serving bias |
-| Semantic preservation | BERTScore F1 (`bert-score` library, local) | Objective, LLM-independent, deterministic |
-
----
-
-## 12. Open Questions (Resolved)
-
-| Question | Decision |
+| Metric | Method |
 |---|---|
-| Branching strategy | Highest-ranked path per branch (v1); multi-path deferred |
-| Embedding model | Local `all-MiniLM-L6-v2`; OpenAI embeddings deferred |
-| λ for recency decay | Start at 0.05; sweep 0.01–0.1 during eval tuning |
-| Landmark detection | Regex heuristics in v1; LLM classifier as stretch goal |
-| Summarisation model | OpenAI-compatible API; model configurable via env var |
-| Hard mode signals | Adaptive strategy and landmark detection are Must Have, not stretch |
-| Judge reliability | Mitigated via order-swap, rubric decomposition, and independent BERTScore metric |
+| **Token reduction %** | `(full_tokens − opt_tokens) / full_tokens` |
+| **BERTScore F1** | Between `A_full` and `A_opt`; threshold ≥ 0.85 |
+| **Landmark recall** | Slot-annotated turns recovered by landmark detector vs. total slot-annotated turns |
+| **Assembly latency** | Wall-clock ms from `(conversation, query)` to optimised thread |
+
+### 11.3 Results Table Format
+
+| Conv | Turns | Full Tok | Opt Tok | Reduction | Full Q | Opt Q | ΔQ | BERTScore | LM Recall | Latency |
+|---|---|---|---|---|---|---|---|---|---|---|
+| dlg-xxx | 45 | 8,200 | 4,300 | 48% | 8.3 | 8.5 | +0.2 | 0.89 | 0.84 | 290ms |
+
+**Acceptance bar:** optimised mean quality ≥ full mean quality AND BERTScore F1 ≥ 0.85. Underperforming cases reported, not hidden.
+
+---
+
+## 12. Stack & Model Choices
+
+| Component | Choice | Rationale |
+|---|---|---|
+| Embeddings | `all-MiniLM-L6-v2` (local) | Free, fast, deterministic |
+| Keyword scoring | TF-IDF via `scikit-learn` | Lightweight, deterministic |
+| Landmark detection | Slot annotations + pattern matching | Ground truth available for stated intents and decisions |
+| Query classification | Rule-based classifier (LLM fallback) | Deterministic by default |
+| Summarisation LLM | OpenAI-compatible API (env-configurable) | Quality matters; cost tracked |
+| Judge LLM | OpenAI-compatible API, different model | Reduces self-serving bias |
+| Semantic preservation | BERTScore F1 (local) | Objective, LLM-independent |
 
 ---
 
 ## 13. Out of Scope (v1)
 
-- Streaming / incremental context assembly
+- Synthetic LEC conversation generation
 - Fine-tuned landmark classifier
-- Multi-path branch evaluation
-- Concurrent / multi-session handling
+- Streaming context assembly
 - Production deployment / serving infrastructure
+- Multi-domain evaluation (hotels, restaurant-search deferred to stretch)
 
 ---
 
