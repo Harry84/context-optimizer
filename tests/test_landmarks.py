@@ -6,21 +6,11 @@ from src.landmarks.rule_detector import RuleLandmarkDetector
 
 
 def _conv(utterances: list[tuple[str, str, list[str] | None]]) -> Conversation:
-    """Helper: build a minimal Conversation from (speaker, text, slots?) tuples."""
     turns = [
-        Turn(
-            turn_index=i,
-            speaker=sp,
-            text=tx,
-            slots=sl or [],
-        )
+        Turn(turn_index=i, speaker=sp, text=tx, slots=sl or [])
         for i, (sp, tx, sl) in enumerate(utterances)
     ]
-    return Conversation(
-        conversation_id="test",
-        instruction_id="test",
-        turns=turns,
-    )
+    return Conversation(conversation_id="test", instruction_id="test", turns=turns)
 
 
 detector = RuleLandmarkDetector()
@@ -31,9 +21,8 @@ detector = RuleLandmarkDetector()
 def test_intent_explicit_verb():
     conv = _conv([("USER", "I'd like a flight to Orlando.", None)])
     detector.detect(conv)
-    t = conv.turns[0]
-    assert t.is_landmark
-    assert t.landmark_type == "intent"
+    assert conv.turns[0].is_landmark
+    assert conv.turns[0].landmark_type == "intent"
 
 
 def test_intent_slot_signal_price():
@@ -65,28 +54,24 @@ def test_decision_strong_confirmation():
 
 
 def test_decision_assistant_offer():
-    conv = _conv([
-        ("ASSISTANT", "I found a flight departing at 8:15 AM for $1505.", None)
-    ])
+    conv = _conv([("ASSISTANT", "I found a flight departing at 8:15 AM for $1505.", None)])
     detector.detect(conv)
     assert conv.turns[0].is_landmark
     assert conv.turns[0].landmark_type == "decision"
 
 
 def test_decision_weak_confirmation_after_offer():
-    """Weak 'yes' after an ASSISTANT offer → both promoted to decision."""
     conv = _conv([
         ("ASSISTANT", "The flight costs $1505. Is that okay?", None),
         ("USER", "Yes.", None),
     ])
     detector.detect(conv)
-    assert conv.turns[0].is_landmark   # assistant offer
-    assert conv.turns[1].is_landmark   # weak confirmation
+    assert conv.turns[0].is_landmark
+    assert conv.turns[1].is_landmark
     assert conv.turns[1].promoted
 
 
 def test_decision_weak_confirmation_no_offer_not_promoted():
-    """Bare 'yes' with no preceding offer → NOT promoted."""
     conv = _conv([
         ("ASSISTANT", "Anything else I can help with?", None),
         ("USER", "Yes.", None),
@@ -95,24 +80,47 @@ def test_decision_weak_confirmation_no_offer_not_promoted():
     assert not conv.turns[1].is_landmark
 
 
+# ─── Conversation close tests ─────────────────────────────────────────────────
+
+def test_conversation_close_that_will_be_all():
+    """User signals end of conversation without explicit booking."""
+    conv = _conv([("USER", "Okay. That will be all.", None)])
+    detector.detect(conv)
+    assert conv.turns[0].is_landmark
+    assert conv.turns[0].landmark_type == "decision"
+
+
+def test_conversation_close_im_done():
+    conv = _conv([("USER", "Oh, I'm done.", None)])
+    detector.detect(conv)
+    assert conv.turns[0].is_landmark
+    assert conv.turns[0].landmark_type == "decision"
+
+
+def test_conversation_close_that_is_everything():
+    conv = _conv([("USER", "I think that's everything I needed.", None)])
+    detector.detect(conv)
+    assert conv.turns[0].is_landmark
+    assert conv.turns[0].landmark_type == "decision"
+
+
+def test_conversation_close_nothing_else():
+    conv = _conv([("USER", "Nothing else, thanks.", None)])
+    detector.detect(conv)
+    assert conv.turns[0].is_landmark
+
+
 # ─── Action item tests ───────────────────────────────────────────────────────
 
 def test_action_item_send():
-    conv = _conv([
-        ("ASSISTANT", "I'll send you the flight details now.", None)
-    ])
+    conv = _conv([("ASSISTANT", "I'll send you the flight details now.", None)])
     detector.detect(conv)
     assert conv.turns[0].is_landmark
     assert conv.turns[0].landmark_type == "action_item"
 
 
 def test_action_item_booking_confirmed():
-    """Booking confirmation is a landmark — classified as decision because the
-    offer pattern fires before action item patterns. Both types are correct for
-    a booking confirmation; is_landmark is what matters."""
-    conv = _conv([
-        ("ASSISTANT", "Your tickets have been booked and confirmed.", None)
-    ])
+    conv = _conv([("ASSISTANT", "Your tickets have been booked and confirmed.", None)])
     detector.detect(conv)
     assert conv.turns[0].is_landmark
     assert conv.turns[0].landmark_type in ("action_item", "decision")
@@ -135,16 +143,15 @@ def test_detect_is_idempotent():
         ("ASSISTANT", "When would you like to travel?", None),
     ])
     detector.detect(conv)
-    first_result = [(t.is_landmark, t.landmark_type) for t in conv.turns]
+    first  = [(t.is_landmark, t.landmark_type) for t in conv.turns]
     detector.detect(conv)
-    second_result = [(t.is_landmark, t.landmark_type) for t in conv.turns]
-    assert first_result == second_result
+    second = [(t.is_landmark, t.landmark_type) for t in conv.turns]
+    assert first == second
 
 
 # ─── Cross-turn alignment (pass 2) ───────────────────────────────────────────
 
 def test_pass2_pattern_b_echo():
-    """USER constraint echoed by ASSISTANT → both are landmarks."""
     conv = _conv([
         ("USER", "I want to fly to London.", None),
         ("ASSISTANT", "So you want to fly to London, is that correct?", None),

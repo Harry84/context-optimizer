@@ -3,14 +3,6 @@ v1 Landmark Detector — Rule-based + Two-Pass Cross-Turn Alignment.
 
 Detection operates on RAW TEXT AND SPEAKER ROLE ONLY.
 Slot annotations are never used here — they are evaluation ground truth only.
-
-Measured performance on Taskmaster-2 flights (1,692 conversations, ≥20 turns):
-  GT recall:   86.6%  (20,092 / 23,190 slot-annotated turns detected)
-  Landmark %:  46.4%  of all turns
-  Compressible: 53.6% of all turns
-  Promoted by pass 2: 879 turns (3.7% of all landmarks)
-
-See ARCHITECTURE.md §5.2 and key_decisions.md KD-009, KD-010 for design rationale.
 """
 
 from __future__ import annotations
@@ -20,40 +12,26 @@ import re
 from src.ingestion.models import Conversation, Turn
 
 # ─── Slot-value signals ──────────────────────────────────────────────────────
-# Domain vocabulary indicating a turn carries real flight information.
-# Used for both USER intent detection and ASSISTANT offer/decision detection.
 
 SLOT_SIGNALS: list[str] = [
-    # Times
     r"\b\d{1,2}:\d{2}\s*(a\.?m\.?|p\.?m\.?)\b",
-    # Prices
     r"\$\s*\d+",
     r"\b(under|less than|up to|around|about|max|maximum|budget|not more than)\b.{0,15}\$?\d",
-    # Airlines
     r"\b(delta|united|american airlines?|southwest|jetblue|british airways|"
     r"lufthansa|frontier|virgin|alaska|air canada|klm|air new zealand|"
     r"spirit|hawaiian|allegiant)\b",
-    # Seat class
     r"\b(business|economy|first|coach|premium economy)\b",
-    # Stops
     r"\b(non.?stop|nonstop|direct|layover|stopover|one stop|two stops?|no stops?)\b",
-    # Trip type
     r"\b(one.?way|round.?trip|multi.?city)\b",
-    # Travel verb + direction
     r"\b(fly(ing)?|flight|travel(l?ing)?|going|heading|depart(ing)?|leav(e|ing))\b.{0,40}\b(to|from)\b",
     r"\bfrom\b.{2,40}\bto\b",
-    # Time of day
     r"\b(morning|afternoon|evening|early|late|overnight|red.?eye)\b",
-    # Dates
     r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\b",
     r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
     r"\b\d+(st|nd|rd|th)\b",
     r"\b(today|tomorrow|next week|this weekend|next month)\b",
-    # Seat location
     r"\b(aisle|window|middle)\b.{0,10}(seat)?\b",
-    # Amenities
     r"\b(wi.?fi|meal|food|alcohol|entertainment|baggage|luggage)\b",
-    # Passenger count
     r"\b\d+\s*(people|persons?|passengers?|adults?|tickets?|seats?)\b",
 ]
 
@@ -78,8 +56,53 @@ _FILLER_RE = re.compile(
 
 
 def _is_pure_filler(text: str) -> bool:
-    """Short turns with no slot signals matching acknowledgement patterns."""
     return len(text.strip()) < 50 and not _has_slot_signal(text) and bool(_FILLER_RE.match(text.strip()))
+
+
+# ─── Conversation close patterns (USER signalling end of conversation) ────────
+
+_CONVERSATION_CLOSE = re.compile(
+    r"\b("
+    # Explicit completion signals
+    r"that('s| is| will be)? all|"
+    r"that('s| is)? everything|"
+    r"that (does it|covers it)|"
+    r"i('m| am) (done|finished|all set|good|set)|"
+    r"we('re| are) (done|finished|all set)|"
+    r"i think (that('s| is) (it|all|everything))|"
+    r"i('ve| have) (got|gotten) (what|everything) i need(ed)?|"
+    # Declining further help
+    r"i (don't|do not) need (anything|nothing) else|"
+    r"nothing else|"
+    r"no (more|other) questions?|"
+    r"no (thanks|thank you),? ?(that'?s? (all|it|everything|good|fine))?|"
+    r"no,? i('m| am) (good|fine|all set|okay|ok)|"
+    # Gratitude as closing signal
+    r"thanks? (for (your |the )?(help|assistance|time|everything))|"
+    r"thank you (for (your |the )?(help|assistance|time|everything))|"
+    r"(really |very |much )?appreciated|"
+    # Farewell signals
+    r"(good)?bye|"
+    r"have a (good|great|nice) (day|one|evening|afternoon)|"
+    r"talk (to you |with you )?(soon|later)|"
+    r"(take care|cheers|so long)|"
+    # Casual wrap-ups
+    r"that'?s? (it|all|everything|good|fine|perfect|great)|"
+    r"i('m| am) (all set|good to go)|"
+    r"sounds (good|great|perfect|fine)|"
+    r"perfect,? (thanks?|thank you)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _is_conversation_close(text: str) -> bool:
+    """
+    Returns True if a USER turn signals the conversation is ending.
+    These are landmarks because they tell the LLM the conversation goal
+    was met (or abandoned) and the state is resolved.
+    """
+    return bool(_CONVERSATION_CLOSE.search(text.strip()))
 
 
 # ─── Intent patterns (USER) ──────────────────────────────────────────────────
@@ -132,7 +155,7 @@ _WEAK_CONFIRMATION = re.compile(
     re.IGNORECASE,
 )
 
-# ─── Echo patterns (ASSISTANT confirming back a user constraint) ─────────────
+# ─── Echo patterns ───────────────────────────────────────────────────────────
 
 _ECHO_PATTERNS = [re.compile(p, re.IGNORECASE) for p in [
     r"\b(you said|you mentioned|you want|you('d| would) like|you('re| are) looking for)\b",
@@ -146,7 +169,7 @@ def _is_assistant_echo(text: str) -> bool:
     return _has_slot_signal(text) and any(p.search(text) for p in _ECHO_PATTERNS)
 
 
-# ─── Action item patterns (ASSISTANT committing to action) ───────────────────
+# ─── Action item patterns ─────────────────────────────────────────────────────
 
 _ACTION_PATTERNS = [re.compile(p, re.IGNORECASE) for p in [
     r"\b(i'?ll|i will|i'?m going to)\b.{0,50}\b(send|book|confirm|process|arrange|reserve|email)\b",
@@ -160,21 +183,20 @@ _ACTION_PATTERNS = [re.compile(p, re.IGNORECASE) for p in [
 # ─── Pass 1: Individual turn scoring ─────────────────────────────────────────
 
 def _pass1(turn: Turn) -> tuple[bool, str | None, str]:
-    """
-    Score a single turn independently using text signals only.
-    Returns (is_landmark, landmark_type, reason).
-    """
-    text = turn.text
+    text   = turn.text
+    text_l = text.lower().strip()
 
     if _is_pure_filler(text):
         return False, None, ""
-
-    text_l = text.lower().strip()
 
     if turn.speaker == "USER":
         # Strong confirmation → decision
         if _STRONG_CONFIRMATION.search(text_l):
             return True, "decision", "strong confirmation"
+
+        # Conversation close signal → decision
+        if _is_conversation_close(text):
+            return True, "decision", "conversation close"
 
         # Explicit intent verb → stated intent
         for p in _INTENT_VERB_PATTERNS:
@@ -186,15 +208,12 @@ def _pass1(turn: Turn) -> tuple[bool, str | None, str]:
             return True, "intent", "slot signal in user turn"
 
     if turn.speaker == "ASSISTANT":
-        # Presenting concrete options/details → decision
         if _is_assistant_offer(text):
             return True, "decision", "assistant offer"
 
-        # Contains slot-value signal → decision
         if _has_slot_signal(text):
             return True, "decision", "slot signal in assistant turn"
 
-        # Commitment to action → action item
         for p in _ACTION_PATTERNS:
             if p.search(text_l):
                 return True, "action_item", "action pattern"
@@ -205,93 +224,66 @@ def _pass1(turn: Turn) -> tuple[bool, str | None, str]:
 # ─── Pass 2: Cross-turn alignment ────────────────────────────────────────────
 
 def _pass2(turns: list[Turn]) -> None:
-    """
-    Promote turns based on cross-turn structural patterns.
-    Mutates turns in-place. Sets promoted=True on promoted turns.
-
-    Pattern A — Offer → Confirmation:
-      ASSISTANT[i] makes offer AND USER[i+1] gives weak confirmation
-      → both promoted to landmark:decision
-
-    Pattern B — Constraint → Echo:
-      USER[i] has slot signal AND ASSISTANT[i+1] echoes it
-      → both promoted to landmark:intent
-    """
     n = len(turns)
     for i in range(n - 1):
         curr = turns[i]
         nxt  = turns[i + 1]
 
-        # Pattern A
+        # Pattern A — Offer → Confirmation
         if (curr.speaker == "ASSISTANT"
                 and nxt.speaker == "USER"
                 and _WEAK_CONFIRMATION.match(nxt.text.strip())
                 and _is_assistant_offer(curr.text)):
 
             if not curr.is_landmark:
-                curr.is_landmark    = True
-                curr.landmark_type  = "decision"
+                curr.is_landmark     = True
+                curr.landmark_type   = "decision"
                 curr.landmark_reason = "offer confirmed by next USER turn [align-A]"
-                curr.promoted       = True
+                curr.promoted        = True
 
             if not nxt.is_landmark:
-                nxt.is_landmark    = True
-                nxt.landmark_type  = "decision"
+                nxt.is_landmark     = True
+                nxt.landmark_type   = "decision"
                 nxt.landmark_reason = "weak confirmation of ASSISTANT offer [align-A]"
-                nxt.promoted       = True
+                nxt.promoted        = True
 
-        # Pattern B
+        # Pattern B — Constraint → Echo
         if (curr.speaker == "USER"
                 and nxt.speaker == "ASSISTANT"
                 and _has_slot_signal(curr.text)
                 and _is_assistant_echo(nxt.text)):
 
             if not curr.is_landmark:
-                curr.is_landmark    = True
-                curr.landmark_type  = "intent"
+                curr.is_landmark     = True
+                curr.landmark_type   = "intent"
                 curr.landmark_reason = "constraint echoed by next ASSISTANT turn [align-B]"
-                curr.promoted       = True
+                curr.promoted        = True
 
             if not nxt.is_landmark:
-                nxt.is_landmark    = True
-                nxt.landmark_type  = "intent"
+                nxt.is_landmark     = True
+                nxt.landmark_type   = "intent"
                 nxt.landmark_reason = "echo confirms prior USER constraint [align-B]"
-                nxt.promoted       = True
+                nxt.promoted        = True
 
 
 # ─── Public detector class ────────────────────────────────────────────────────
 
 class RuleLandmarkDetector:
-    """
-    Two-pass rule-based landmark detector.
-
-    Pass 1: Score each turn individually using text signals.
-    Pass 2: Promote turns based on cross-turn alignment patterns.
-
-    Operates on raw text and speaker role only.
-    Slot annotations are never read here.
-    """
+    """Two-pass rule-based landmark detector. Operates on raw text and speaker role only."""
 
     def detect(self, conversation: Conversation) -> Conversation:
-        """
-        Annotate all turns in-place and return the conversation.
-        Safe to call multiple times — resets annotations before running.
-        """
-        # Reset any previous annotations
         for turn in conversation.turns:
             turn.is_landmark     = False
             turn.landmark_type   = None
             turn.landmark_reason = ""
             turn.promoted        = False
 
-        # Pass 1: individual scoring
         for turn in conversation.turns:
             is_lm, lm_type, reason = _pass1(turn)
             turn.is_landmark     = is_lm
             turn.landmark_type   = lm_type
             turn.landmark_reason = reason
 
-        # Pass 2: cross-turn alignment
         _pass2(conversation.turns)
 
         return conversation
