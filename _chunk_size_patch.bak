@@ -1,0 +1,2 @@
+    chunk_size:   int = 6
+    chunk_stride: int = 2

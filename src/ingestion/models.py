@@ -44,6 +44,7 @@ class OptimizerConfig:
     # "sentence"      — v2: sentence-level within landmark turns
     # "topk"          — v3: proportional top-K turn retrieval
     # "topk-sentence" — v4: top-K across all units including landmark sentences
+    # "chunk"         — v5: overlapping multi-turn chunk scoring + top-K
     compression_strategy: str = "turn"
 
     # Query classification
@@ -65,14 +66,14 @@ class OptimizerConfig:
         "preference": {"high": 0.60, "low": 0.35},
     })
 
-    # v2 sentence-level thresholds (tighter — sentences have less context)
+    # v2 sentence-level thresholds
     sentence_thresholds: dict = field(default_factory=lambda: {
         "factual":    {"high": 0.80, "low": 0.60},
         "analytical": {"high": 0.75, "low": 0.55},
         "preference": {"high": 0.70, "low": 0.50},
     })
 
-    # v3 top-K fraction — proportion of non-landmark TURNS to keep
+    # v3 top-K fraction — proportion of turns to keep (landmarks compete)
     topk_fraction: dict = field(default_factory=lambda: {
         "factual":    0.20,
         "analytical": 0.35,
@@ -80,16 +81,25 @@ class OptimizerConfig:
     })
     topk_min_score: float = 0.30
 
-    # v4 top-K sentence fraction — proportion of ALL units (landmark sentences
-    # + non-landmark turns) to keep. Higher than v3 because sentence splitting
-    # increases the unit count and landmarks compete rather than hard-KEEP.
-    # Factual: keep ~40% of units — flight comparison content tends to score
-    # highly against flight queries, so top 40% captures it cleanly.
-    # Analytical: keep more — reasoning requires broader context.
+    # v4 top-K sentence fraction
     topk_sentence_fraction: dict = field(default_factory=lambda: {
         "factual":    0.40,
         "analytical": 0.60,
         "preference": 0.50,
+    })
+
+    # v5 chunk-based retrieval settings.
+    # chunk_size:   number of turns per chunk (rich enough for embedding)
+    # chunk_stride: step between chunk start positions (overlap = size - stride)
+    # chunk_topk_fraction: proportion of turns to keep after chunk scoring
+    # A turn's score = max score of any chunk it appears in.
+    # Landmarks receive a boost but are not hard-KEEPed.
+    chunk_size:   int = 6
+    chunk_stride: int = 2
+    chunk_topk_fraction: dict = field(default_factory=lambda: {
+        "factual":    0.35,
+        "analytical": 0.55,
+        "preference": 0.45,
     })
 
     # Model names

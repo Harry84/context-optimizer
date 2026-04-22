@@ -1,13 +1,12 @@
 """
 Full compression pipeline entry point.
 
-compress() is the single function called by the evaluation harness.
-
 Compression strategy selected via config.compression_strategy:
   "turn"          — v1 threshold-based turn-level
   "sentence"      — v2 sentence-level within landmark turns
   "topk"          — v3 proportional top-K turn retrieval
-  "topk-sentence" — v4 top-K + sentence splitting of landmark turns
+  "topk-sentence" — v4 top-K across all units including landmark sentences
+  "chunk"         — v5 overlapping multi-turn chunk scoring + top-K
 """
 
 from __future__ import annotations
@@ -62,6 +61,15 @@ def compress(
     elif config.compression_strategy == "topk-sentence":
         from src.compression.topk_sentence_compressor import topk_sentence_runs
         runs = topk_sentence_runs(
+            history=scored_history,
+            query=query,
+            query_position=query_position,
+            query_type=query_type,
+            config=config,
+        )
+    elif config.compression_strategy == "chunk":
+        from src.compression.chunk_compressor import chunk_topk_runs
+        runs = chunk_topk_runs(
             history=scored_history,
             query=query,
             query_position=query_position,
