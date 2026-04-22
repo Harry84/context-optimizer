@@ -9,17 +9,21 @@ sentences in a landmark turn are scored independently against the query.
 Returns the same list[Run] type as compressor.py so the assembler is
 completely unchanged.
 
-Key difference from v1:
+Key differences from v1:
   v1: turn.is_landmark=True → entire turn KEEPed verbatim
   v2: turn.is_landmark=True → split into sentences → only landmark
       sentences KEEPed; filler sentences scored independently and compressed.
-      Kept sentences from the same turn are re-merged into a single turn
-      before assembly so the thread structure remains valid.
+      Within a landmark turn, COMPRESS sentences sandwiched between KEEP
+      sentences are promoted to KEEP to maintain turn coherence and prevent
+      [context continues] bridges in the assembled output.
+      Tighter sentence_thresholds used because individual sentences have
+      less context, making semantic scores noisier than at turn level.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import defaultdict
 
 from src.compression.compressor import Run, _merge_singleton_compress_runs
 from src.compression.sentence_splitter import split_sentences
@@ -52,11 +56,13 @@ class Sentence:
     disposition:   str = ""
 
 
+def _effective(disposition: str) -> str:
+    """KEEP and CANDIDATE are both effectively KEEP for grouping purposes."""
+    return "KEEP" if disposition in ("KEEP", "CANDIDATE") else "COMPRESS"
+
+
 def _sentence_is_landmark(text: str, speaker: str) -> tuple[bool, str | None]:
-    """
-    Re-run landmark pattern matching at sentence level.
-    Same logic as rule_detector._pass1 but on a single sentence.
-    """
+    """Re-run landmark pattern matching at sentence level."""
     text_l = text.lower().strip()
 
     if _is_pure_filler(text):
@@ -86,10 +92,8 @@ def _sentence_is_landmark(text: str, speaker: str) -> tuple[bool, str | None]:
 
 
 def _split_turn_into_sentences(turn: Turn) -> list[Sentence]:
-    """
-    Split a landmark Turn into Sentence objects, re-running landmark
-    patterns at sentence level so only triggering sentences are KEEPed.
-    """
+    """Split a landmark Turn into Sentence objects, re-running landmark
+    patterns at sentence level so only triggering sentences are KEEPed."""
     raw_sentences = split_sentences(turn.text)
     sentences = []
     for idx, text in enumerate(raw_sentences):
@@ -111,14 +115,7 @@ def _score_non_landmark_sentences(
     query_position: int,
     config: OptimizerConfig,
 ) -> list[Sentence]:
-    """
-    Score non-landmark sentences independently against the query.
-
-    Landmark sentences get score=1.0 (hard KEEP).
-    Non-landmark sentences are scored individually using keyword +
-    semantic + recency — NOT inheriting the parent turn's score, which
-    would be inflated by the landmark signal in the same turn.
-    """
+    """Score non-landmark sentences independently against the query."""
     non_lm = [s for s in sentences if not s.is_landmark]
 
     if not non_lm:
@@ -137,17 +134,10 @@ def _score_non_landmark_sentences(
 
     score_map: dict[int, float] = {}
     for i, s in enumerate(non_lm):
-        score_map[id(s)] = (
-            w1 * kw_scores[i]
-            + w2 * sem_scores[i]
-            + w3 * rec_scores[i]
-        )
+        score_map[id(s)] = w1 * kw_scores[i] + w2 * sem_scores[i] + w3 * rec_scores[i]
 
     for s in sentences:
-        if s.is_landmark:
-            s.score = 1.0
-        else:
-            s.score = score_map.get(id(s), 0.0)
+        s.score = 1.0 if s.is_landmark else score_map.get(id(s), 0.0)
 
     return sentences
 
@@ -157,9 +147,9 @@ def _classify_sentences(
     query_type: str,
     config: OptimizerConfig,
 ) -> list[Sentence]:
-    """Assign KEEP/CANDIDATE/COMPRESS disposition to each sentence."""
-    high = config.thresholds[query_type]["high"]
-    low  = config.thresholds[query_type]["low"]
+    """Assign KEEP/CANDIDATE/COMPRESS using tighter sentence_thresholds."""
+    high = config.sentence_thresholds[query_type]["high"]
+    low  = config.sentence_thresholds[query_type]["low"]
 
     for s in sentences:
         if s.is_landmark:
@@ -174,27 +164,61 @@ def _classify_sentences(
     return sentences
 
 
+def _promote_sandwiched_sentences(sentences: list[Sentence]) -> list[Sentence]:
+    """
+    Within each landmark turn, promote COMPRESS sentences that are sandwiched
+    between KEEP sentences to KEEP.
+
+    A COMPRESS sentence flanked by KEEPs from the same turn causes alternating
+    KEEP/COMPRESS/KEEP groups, which after assembly produce:
+        [USER] kept sentence
+        [ASSISTANT] [context continues]   ← bridge
+        [USER] another kept sentence
+
+    Promoting the sandwiched COMPRESS to KEEP allows all three to merge into
+    one USER turn. The cost is keeping a few extra words; the benefit is a
+    coherent thread structure with no spurious bridges.
+
+    Only applies within individual turns — does not affect cross-turn grouping.
+    """
+    # Group sentences by turn_index for per-turn processing
+    by_turn: dict[int, list[int]] = defaultdict(list)
+    for i, s in enumerate(sentences):
+        by_turn[s.turn_index].append(i)
+
+    for turn_idx, indices in by_turn.items():
+        if len(indices) <= 1:
+            continue
+
+        turn_sentences = [sentences[i] for i in indices]
+
+        # Only process landmark turns that were split
+        if not any(s.is_landmark for s in turn_sentences):
+            continue
+
+        # Find sandwiched COMPRESS sentences:
+        # a sentence at position j is sandwiched if there exists a KEEP
+        # before it and a KEEP after it within the same turn
+        has_keep_before = False
+        for j, s in enumerate(turn_sentences):
+            if _effective(s.disposition) == "KEEP":
+                has_keep_before = True
+            elif s.disposition == "COMPRESS" and has_keep_before:
+                # Check if there's a KEEP after this position
+                has_keep_after = any(
+                    _effective(turn_sentences[k].disposition) == "KEEP"
+                    for k in range(j + 1, len(turn_sentences))
+                )
+                if has_keep_after:
+                    s.disposition = "CANDIDATE"  # promote to KEEP group
+
+    return sentences
+
+
 def _merge_same_turn_sentences(sentences: list[Sentence]) -> list[Sentence]:
     """
-    Merge consecutive sentences that belong to the same turn AND have the
-    same disposition into a single sentence.
-
-    This prevents the assembler seeing multiple consecutive same-speaker
-    turns (one per kept sentence) which would trigger [context continues]
-    bridges and inflate the output thread length.
-
-    Example — a landmark turn split into 3 sentences where sentence 2 is
-    the landmark:
-        [COMPRESS] "Hi there!"          turn_index=0
-        [KEEP]     "I need a flight."   turn_index=0  ← landmark
-        [COMPRESS] "It's complex."      turn_index=0
-
-    Without merging: 3 separate entries → assembler sees consecutive
-    same-speaker turns → inserts bridges → bloated output.
-
-    After merging: COMPRESS sentences from the same turn are combined,
-    KEEP sentences from the same turn are combined. Different dispositions
-    within the same turn remain separate (they go into different runs).
+    Merge consecutive sentences from the same turn with the same effective
+    disposition into a single sentence.
     """
     if not sentences:
         return []
@@ -204,16 +228,13 @@ def _merge_same_turn_sentences(sentences: list[Sentence]) -> list[Sentence]:
         if (merged
                 and merged[-1].turn_index == s.turn_index
                 and merged[-1].speaker == s.speaker
-                and merged[-1].disposition == s.disposition):
-            # Append text to previous sentence
+                and _effective(merged[-1].disposition) == _effective(s.disposition)):
             merged[-1].text = merged[-1].text + " " + s.text
-            # Keep the highest landmark status and score
             if s.is_landmark and not merged[-1].is_landmark:
                 merged[-1].is_landmark   = True
                 merged[-1].landmark_type = s.landmark_type
             merged[-1].score = max(merged[-1].score, s.score)
         else:
-            # New group — append a copy
             merged.append(Sentence(
                 turn_index=s.turn_index,
                 sentence_idx=s.sentence_idx,
@@ -230,29 +251,28 @@ def _merge_same_turn_sentences(sentences: list[Sentence]) -> list[Sentence]:
 
 def _sentences_to_runs(sentences: list[Sentence]) -> list[Run]:
     """
-    Merge same-turn sentences, then group into contiguous KEEP/COMPRESS runs.
-    Sentences are wrapped as synthetic Turn objects for assembler compatibility.
+    Promote sandwiched sentences, merge same-turn sentences, then group
+    into contiguous KEEP/COMPRESS runs.
     """
     if not sentences:
         return []
 
-    # Key fix: merge sentences from the same turn before grouping into runs
+    sentences = _promote_sandwiched_sentences(sentences)
     sentences = _merge_same_turn_sentences(sentences)
 
     runs: list[Run] = []
     for s in sentences:
-        effective = "KEEP" if s.disposition in ("KEEP", "CANDIDATE") else "COMPRESS"
-
+        eff = _effective(s.disposition)
         synthetic_turn = Turn(turn_index=s.turn_index, speaker=s.speaker, text=s.text)
         synthetic_turn.is_landmark   = s.is_landmark
         synthetic_turn.landmark_type = s.landmark_type
         synthetic_turn.score         = s.score
         synthetic_turn.disposition   = s.disposition
 
-        if runs and runs[-1][0] == effective:
+        if runs and runs[-1][0] == eff:
             runs[-1][1].append(synthetic_turn)
         else:
-            runs.append((effective, [synthetic_turn]))
+            runs.append((eff, [synthetic_turn]))
 
     runs = _merge_singleton_compress_runs(runs)
     return runs
@@ -266,28 +286,25 @@ def classify_turns_sentence_level(
     config: OptimizerConfig,
 ) -> list[Run]:
     """
-    Sentence-level equivalent of compressor.classify_turns() + group_into_runs().
+    Sentence-level compression pipeline.
 
     Non-landmark turns: treated atomically (same as v1).
-    Landmark turns: split into sentences, landmark patterns re-run per
-    sentence, non-landmark sentences scored independently against query,
-    kept sentences from the same turn merged back before assembly.
-
-    Returns list[Run] — same type as compressor.group_into_runs().
+    Landmark turns: split → sentence-level landmark detection →
+    independent scoring → classify → promote sandwiched sentences →
+    merge same-turn same-disposition sentences → group into runs.
     """
     all_sentences: list[Sentence] = []
 
     for turn in history:
         if not turn.is_landmark:
-            s = Sentence(
+            all_sentences.append(Sentence(
                 turn_index=turn.turn_index,
                 sentence_idx=0,
                 speaker=turn.speaker,
                 text=turn.text,
                 is_landmark=False,
                 score=turn.score,
-            )
-            all_sentences.append(s)
+            ))
         else:
             sentences = _split_turn_into_sentences(turn)
             sentences = _score_non_landmark_sentences(

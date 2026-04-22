@@ -60,11 +60,21 @@ class OptimizerConfig:
         "preference": {"keyword": 0.2, "semantic": 0.3, "recency": 0.5},
     })
 
-    # Compression thresholds per query type.
+    # Turn-level compression thresholds (v1 strategy).
     thresholds: dict = field(default_factory=lambda: {
         "factual":    {"high": 0.72, "low": 0.45},
         "analytical": {"high": 0.65, "low": 0.40},
         "preference": {"high": 0.60, "low": 0.35},
+    })
+
+    # Sentence-level compression thresholds (v2 strategy).
+    # Tighter than turn-level because individual sentences have less context,
+    # making semantic similarity scores noisier — we need a higher bar to
+    # avoid keeping weak-signal filler sentences.
+    sentence_thresholds: dict = field(default_factory=lambda: {
+        "factual":    {"high": 0.80, "low": 0.60},
+        "analytical": {"high": 0.75, "low": 0.55},
+        "preference": {"high": 0.70, "low": 0.50},
     })
 
     # Model names
