@@ -1,0 +1,9 @@
+        if config.compression_strategy == "sentence":
+            from src.compression.sentence_compressor import classify_turns_sentence_level
+            runs = classify_turns_sentence_level(
+                history=scored,
+                query=query,
+                query_position=query_pos,
+                query_type=query_type,
+                config=config,
+            )

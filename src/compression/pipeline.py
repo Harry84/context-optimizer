@@ -4,6 +4,10 @@ Full compression pipeline entry point.
 compress() is the single function called by the evaluation harness.
 It takes a Conversation, a query string, and the query's position in
 the conversation, and returns an optimised [{role, content}] thread.
+
+Compression strategy is selected via config.compression_strategy:
+  "turn"     — v1 turn-level (compressor.py)
+  "sentence" — v2 sentence-level (sentence_compressor.py)
 """
 
 from __future__ import annotations
@@ -31,27 +35,13 @@ def compress(
     Only turns[0..query_position-1] are used as context.
     Turn at query_position is the current query being answered.
     Turns after query_position are ignored (not yet in history).
-
-    Args:
-        conversation:   Full Conversation object (landmark-detected on first call).
-        query:          The current query string.
-        query_position: Index of the query turn in the conversation.
-                        Must be > 0.
-        config:         OptimizerConfig.
-
-    Returns:
-        (thread, stats, latency_ms) where:
-          thread      — optimised [{role, content}] list for LLM consumption
-          stats       — AssemblyStats with counts (for reporting)
-          latency_ms  — wall-clock time for compression in milliseconds
     """
     assert query_position > 0, "query_position must be > 0 (need at least one history turn)"
     assert query_position <= len(conversation.turns), "query_position out of range"
 
     t_start = time.perf_counter()
 
-    # 1. Ensure landmark detection has been run on the full conversation.
-    #    The detector is idempotent — safe to call multiple times.
+    # 1. Landmark detection (idempotent — safe to call multiple times)
     detector = get_detector(config)
     detector.detect(conversation)
 
@@ -69,13 +59,21 @@ def compress(
         config=config,
     )
 
-    # 5. Assign disposition to each turn.
-    classified = classify_turns(scored_history, query_type, config)
+    # 5. Classify and group into runs — strategy selected via config.
+    if config.compression_strategy == "sentence":
+        from src.compression.sentence_compressor import classify_turns_sentence_level
+        runs: list[Run] = classify_turns_sentence_level(
+            history=scored_history,
+            query=query,
+            query_position=query_position,
+            query_type=query_type,
+            config=config,
+        )
+    else:
+        classified = classify_turns(scored_history, query_type, config)
+        runs = group_into_runs(classified)
 
-    # 6. Group into contiguous runs.
-    runs: list[Run] = group_into_runs(classified)
-
-    # 7. Summarise each COMPRESS run (one LLM call per run).
+    # 6. Summarise each COMPRESS run (one LLM call per run).
     summaries: dict[int, str] = {}
     for disposition, run_turns in runs:
         if disposition == "COMPRESS":
@@ -85,7 +83,7 @@ def compress(
                 model=config.summarisation_model,
             )
 
-    # 8. Assemble final thread.
+    # 7. Assemble final thread.
     thread, stats = assemble(runs, summaries)
 
     latency_ms = (time.perf_counter() - t_start) * 1000
@@ -97,9 +95,6 @@ def full_context(
     conversation: Conversation,
     query_position: int,
 ) -> list[dict]:
-    """
-    Return the full uncompressed context for baseline comparison.
-    Uses turns 0..query_position-1 with no compression.
-    """
+    """Return the full uncompressed context for baseline comparison."""
     history = conversation.turns[:query_position]
     return format_full_context(history)

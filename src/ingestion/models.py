@@ -42,6 +42,12 @@ class OptimizerConfig:
     # Landmark detection
     landmark_detector: str = "rules"    # "rules" | "embedding" | "llm"
 
+    # Compression strategy
+    # "turn"     — v1: classify and compress whole turns (fast, safe)
+    # "sentence" — v2: split landmark turns into sentences, only KEEP
+    #              the landmark sentences, compress the filler around them
+    compression_strategy: str = "turn"
+
     # Query classification
     query_classifier: str = "rules"     # "rules" | "llm"
 
@@ -54,14 +60,21 @@ class OptimizerConfig:
         "preference": {"keyword": 0.2, "semantic": 0.3, "recency": 0.5},
     })
 
-    # Compression thresholds per query type.
-    # Raised from (0.6/0.3), (0.5/0.25), (0.45/0.2) to push more turns into COMPRESS.
-    # Taskmaster-2 turns are short (~8 tokens each) so we need aggressive compression
-    # to hit 40-60% token reduction — only the highest-scoring turns survive verbatim.
+    # Turn-level compression thresholds (v1 strategy).
     thresholds: dict = field(default_factory=lambda: {
         "factual":    {"high": 0.72, "low": 0.45},
         "analytical": {"high": 0.65, "low": 0.40},
         "preference": {"high": 0.60, "low": 0.35},
+    })
+
+    # Sentence-level compression thresholds (v2 strategy).
+    # Tighter than turn-level because individual sentences have less context,
+    # making semantic similarity scores noisier — we need a higher bar to
+    # avoid keeping weak-signal filler sentences.
+    sentence_thresholds: dict = field(default_factory=lambda: {
+        "factual":    {"high": 0.80, "low": 0.60},
+        "analytical": {"high": 0.75, "low": 0.55},
+        "preference": {"high": 0.70, "low": 0.50},
     })
 
     # Model names

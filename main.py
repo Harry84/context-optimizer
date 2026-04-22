@@ -6,7 +6,9 @@ Usage:
     python main.py inspect --conv-id dlg-xxx --query "..." --query-pos 50
     python main.py inspect --conv-id dlg-xxx --query "..." --query-pos 50 --dry-run
     python main.py inspect --conv-id dlg-xxx --query "..." --query-pos 50 --compare
+    python main.py --compression-strategy sentence inspect --conv-id dlg-xxx --query "..." --query-pos 50 --dry-run
     python main.py evaluate
+    python main.py --compression-strategy sentence evaluate
 """
 
 from __future__ import annotations
@@ -104,6 +106,7 @@ def cmd_inspect(
     print(f"Query pos:    {query_pos}")
     print(f"Query:        {query}")
     print(f"Query type:   {classify_query(query)}")
+    print(f"Strategy:     {config.compression_strategy}")
 
     detector = get_detector(config)
     detector.detect(conv)
@@ -114,23 +117,46 @@ def cmd_inspect(
 
     if dry_run:
         print("\n--- DRY RUN (no LLM calls) ---")
-        history        = conv.turns[:query_pos]
-        query_type     = classify_query(query)
-        scored         = score_turns(history, query, query_pos, config)
-        classified     = classify_turns(scored, query_type, config)
-        runs           = group_into_runs(classified)
-        keep           = sum(1 for t in classified if t.disposition in ("KEEP", "CANDIDATE"))
-        compress_count = sum(1 for t in classified if t.disposition == "COMPRESS")
-        landmarks      = sum(1 for t in classified if t.is_landmark)
-        compress_runs  = sum(1 for d, _ in runs if d == "COMPRESS")
-        print(f"Landmarks detected: {landmarks}")
-        print(f"Turns to KEEP:      {keep}")
-        print(f"Turns to COMPRESS:  {compress_count} ({compress_runs} runs → {compress_runs} LLM calls)")
-        print(f"Est. token reduction: ~{100*compress_count/len(history):.0f}%")
-        print("\n--- PER-TURN DISPOSITIONS ---")
-        for turn in classified:
-            lm = f" [{turn.landmark_type.upper()}]" if turn.is_landmark else ""
-            print(f"  [{turn.disposition:>8}] [{turn.speaker[:4]}] (score={turn.score:.2f}){lm} {turn.text[:80]}")
+        history    = conv.turns[:query_pos]
+        query_type = classify_query(query)
+        scored     = score_turns(history, query, query_pos, config)
+
+        if config.compression_strategy == "sentence":
+            from src.compression.sentence_compressor import classify_turns_sentence_level
+            runs = classify_turns_sentence_level(
+                history=scored,
+                query=query,
+                query_position=query_pos,
+                query_type=query_type,
+                config=config,
+            )
+            keep_count     = sum(len(ts) for d, ts in runs if d == "KEEP")
+            compress_count = sum(len(ts) for d, ts in runs if d == "COMPRESS")
+            compress_runs  = sum(1 for d, _ in runs if d == "COMPRESS")
+            landmarks      = sum(1 for t in history if t.is_landmark)
+            print(f"Landmarks detected: {landmarks} turns")
+            print(f"Sentences to KEEP:     {keep_count}")
+            print(f"Sentences to COMPRESS: {compress_count} ({compress_runs} runs → {compress_runs} LLM calls)")
+            print("\n--- PER-RUN BREAKDOWN ---")
+            for disposition, run_turns in runs:
+                for t in run_turns:
+                    lm = " [LM]" if t.is_landmark else ""
+                    print(f"  [{disposition:>8}] [{t.speaker[:4]}] (score={t.score:.2f}){lm} {t.text[:75]}")
+        else:
+            classified     = classify_turns(scored, query_type, config)
+            runs           = group_into_runs(classified)
+            keep           = sum(1 for t in classified if t.disposition in ("KEEP", "CANDIDATE"))
+            compress_count = sum(1 for t in classified if t.disposition == "COMPRESS")
+            landmarks      = sum(1 for t in classified if t.is_landmark)
+            compress_runs  = sum(1 for d, _ in runs if d == "COMPRESS")
+            print(f"Landmarks detected: {landmarks}")
+            print(f"Turns to KEEP:      {keep}")
+            print(f"Turns to COMPRESS:  {compress_count} ({compress_runs} runs → {compress_runs} LLM calls)")
+            print(f"Est. token reduction: ~{100*compress_count/len(history):.0f}%")
+            print("\n--- PER-TURN DISPOSITIONS ---")
+            for turn in classified:
+                lm = f" [{turn.landmark_type.upper()}]" if turn.is_landmark else ""
+                print(f"  [{turn.disposition:>8}] [{turn.speaker[:4]}] (score={turn.score:.2f}){lm} {turn.text[:80]}")
         return
 
     opt_thread, stats, latency = compress(conv, query, query_pos, config)
@@ -158,15 +184,15 @@ def cmd_evaluate(config: OptimizerConfig) -> None:
     long_convs = [c for c in convs if len(c.turns) >= 50]
     pool = long_convs if len(long_convs) >= 10 else convs
     logger.info(
-        "Evaluation pool: %d conversations (≥50 turns preferred; using %s pool)",
-        len(pool), "long" if pool is long_convs else "full",
+        "Evaluation pool: %d conversations (≥50 turns; using %s pool) | strategy: %s",
+        len(pool), "long" if pool is long_convs else "full", config.compression_strategy,
     )
     eval_convs = random.sample(pool, min(10, len(pool)))
-    # Pass empty dict — harness will call select_queries() per conversation
-    # to pick the two most answerable questions from QUERY_POOL.
     results_df = evaluate(eval_convs, {}, config)
-    results_df.to_csv("eval_results.csv", index=False)
-    print("\nResults saved to eval_results.csv")
+    suffix = f"_{config.compression_strategy}" if config.compression_strategy != "turn" else ""
+    out_path = f"eval_results{suffix}.csv"
+    results_df.to_csv(out_path, index=False)
+    print(f"\nResults saved to {out_path}")
 
 
 def main() -> None:
@@ -186,11 +212,14 @@ def main() -> None:
 
     sub.add_parser("evaluate", help="Run full evaluation pipeline")
 
-    parser.add_argument("--data-path",  default="data/taskmaster2/flights.json")
-    parser.add_argument("--min-turns",  default=20, type=int)
-    parser.add_argument("--detector",   default="rules", choices=["rules", "embedding", "llm"])
-    parser.add_argument("--summariser", default="gpt-4o-mini")
-    parser.add_argument("--judge",      default="gpt-4o")
+    parser.add_argument("--data-path",   default="data/taskmaster2/flights.json")
+    parser.add_argument("--min-turns",   default=20, type=int)
+    parser.add_argument("--detector",    default="rules", choices=["rules", "embedding", "llm"])
+    parser.add_argument("--summariser",  default="gpt-4o-mini")
+    parser.add_argument("--judge",       default="gpt-4o")
+    parser.add_argument("--compression-strategy", default="turn",
+                        choices=["turn", "sentence"],
+                        help="turn=v1 whole-turn compression, sentence=v2 sub-turn sentence compression")
 
     args   = parser.parse_args()
     config = OptimizerConfig(
@@ -199,6 +228,7 @@ def main() -> None:
         landmark_detector=args.detector,
         summarisation_model=args.summariser,
         judge_model=args.judge,
+        compression_strategy=args.compression_strategy,
     )
 
     if args.command == "stats":
