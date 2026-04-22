@@ -18,19 +18,19 @@ Metrics reported per query:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import pandas as pd
 import tiktoken
 from openai import OpenAI
 
-from src.compression.assembler import format_full_context
 from src.compression.pipeline import compress, full_context
 from src.evaluation.bertscore_metric import compute_bertscore
 from src.evaluation.judge import JudgeScores, judge_pair
-from src.evaluation.landmark_recall import landmark_recall, landmark_stats
+from src.evaluation.landmark_recall import landmark_recall
 from src.ingestion.models import Conversation, OptimizerConfig
 from src.landmarks.detector import get_detector
 
@@ -38,6 +38,31 @@ logger = logging.getLogger(__name__)
 
 _llm_client: OpenAI | None = None
 _tokeniser = tiktoken.get_encoding("cl100k_base")
+
+# ---------------------------------------------------------------------------
+# Query pool — covers the main question types an agent might ask about a
+# flight-booking conversation. The selector picks the two most answerable
+# given what actually happened in each conversation.
+# ---------------------------------------------------------------------------
+QUERY_POOL = [
+    # Factual
+    ("What flights were compared and what did the user decide?",          "factual"),
+    ("What were the departure and arrival times of the chosen flight?",   "factual"),
+    ("What was the price of the flight the user selected?",               "factual"),
+    ("Which airline did the user choose and why?",                        "factual"),
+    ("What airports were involved in this booking?",                      "factual"),
+    ("Were there any layovers, and if so where and how long?",            "factual"),
+    ("What seat class did the user request?",                             "factual"),
+    ("What travel dates did the user specify?",                           "factual"),
+    # Analytical
+    ("Why did the user choose the flight they selected?",                 "analytical"),
+    ("What constraints did the user place on the booking and were they met?", "analytical"),
+    ("How did the user's requirements change during the conversation?",   "analytical"),
+    ("What trade-offs did the user make when selecting their flight?",    "analytical"),
+    # Preference
+    ("What were the user's stated preferences for this trip?",            "preference"),
+    ("What amenities or services did the user ask for?",                  "preference"),
+]
 
 
 def _get_client() -> OpenAI:
@@ -48,20 +73,75 @@ def _get_client() -> OpenAI:
 
 
 def _token_count(thread: list[dict]) -> int:
-    total = 0
-    for msg in thread:
-        total += len(_tokeniser.encode(msg.get("content", "")))
-    return total
+    return sum(len(_tokeniser.encode(msg.get("content", ""))) for msg in thread)
 
 
-def _generate_answer(
-    thread: list[dict],
-    query: str,
-    model: str,
-) -> str:
-    """Generate an answer using the provided context thread."""
+def _conversation_snippet(conv: Conversation, n_turns: int = 15) -> str:
+    """Return the first n_turns as a readable string for the query selector."""
+    lines = []
+    for turn in conv.turns[:n_turns]:
+        role = "User" if turn.speaker == "USER" else "Assistant"
+        lines.append(f"{role}: {turn.text}")
+    return "\n".join(lines)
+
+
+def select_queries(conv: Conversation, model: str = "gpt-4o-mini") -> list["EvalQuery"]:
+    """
+    Pick the 2 most answerable queries from QUERY_POOL for this conversation.
+
+    Sends the first 15 turns to gpt-4o-mini and asks it to select the two
+    pool indices whose questions are most grounded in what actually happened.
+    Falls back to indices [0, 8] (factual + analytical defaults) on any error.
+    """
+    snippet = _conversation_snippet(conv, n_turns=15)
+    pool_lines = "\n".join(
+        f"{i}: {q}" for i, (q, _) in enumerate(QUERY_POOL)
+    )
+
+    prompt = f"""Here is the start of a flight booking conversation:
+
+{snippet}
+
+Here is a numbered list of candidate evaluation questions:
+{pool_lines}
+
+Select the 2 question indices (0-based) that are MOST answerable given what
+has already happened in this conversation. Prefer one factual and one analytical
+question where possible. Return ONLY a JSON object like: {{"indices": [i, j]}}"""
+
+    try:
+        client = _get_client()
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=30,
+            response_format={"type": "json_object"},
+        )
+        data    = json.loads(response.choices[0].message.content)
+        indices = data["indices"]
+        assert len(indices) == 2
+        assert all(0 <= i < len(QUERY_POOL) for i in indices)
+    except Exception as e:
+        logger.warning("Query selection failed for %s (%s) — using defaults", conv.conversation_id, e)
+        indices = [0, 8]  # "What flights were compared" + "Why did the user choose"
+
+    n     = len(conv.turns)
+    q_pos = max(5, int(n * 0.75))
+
+    return [
+        EvalQuery(
+            query_position=q_pos,
+            query_text=QUERY_POOL[i][0],
+            query_type=QUERY_POOL[i][1],
+        )
+        for i in indices
+    ]
+
+
+def _generate_answer(thread: list[dict], query: str, model: str) -> str:
     messages = thread + [{"role": "user", "content": query}]
-    client = _get_client()
+    client   = _get_client()
     try:
         response = client.chat.completions.create(
             model=model,
@@ -77,14 +157,6 @@ def _generate_answer(
 
 @dataclass
 class EvalQuery:
-    """
-    A single evaluation query for a conversation.
-
-    query_position: the index of this query in the conversation turn list.
-                    Only turns 0..query_position-1 are used as context.
-    query_text:     the query string.
-    query_type:     "factual" | "analytical" | "preference" (for reporting).
-    """
     query_position: int
     query_text:     str
     query_type:     str = "factual"
@@ -92,21 +164,21 @@ class EvalQuery:
 
 @dataclass
 class EvalResult:
-    conversation_id:    str
-    query_text:         str
-    query_type:         str
-    turns_in_history:   int
-    full_tokens:        int
-    opt_tokens:         int
+    conversation_id:     str
+    query_text:          str
+    query_type:          str
+    turns_in_history:    int
+    full_tokens:         int
+    opt_tokens:          int
     token_reduction_pct: float
-    quality_full:       float
-    quality_opt:        float
-    delta_quality:      float
-    bertscore_f1:       float | None
-    landmark_recall:    float
-    compression_pct:    float
-    integrity_repairs:  int
-    latency_ms:         float
+    quality_full:        float
+    quality_opt:         float
+    delta_quality:       float
+    bertscore_f1:        float | None
+    landmark_recall:     float
+    compression_pct:     float
+    integrity_repairs:   int
+    latency_ms:          float
 
 
 def evaluate(
@@ -117,15 +189,9 @@ def evaluate(
     """
     Run evaluation across all (conversation, query) pairs.
 
-    Args:
-        conversations: List of Conversation objects.
-        eval_queries:  Dict mapping conversation_id → list of EvalQuery.
-        config:        OptimizerConfig.
-
-    Returns:
-        DataFrame with one row per (conversation, query) pair.
+    If eval_queries is empty for a conversation, queries are selected
+    automatically from QUERY_POOL via select_queries().
     """
-    # Pre-run landmark detection on all conversations
     detector = get_detector(config)
     for conv in conversations:
         detector.detect(conv)
@@ -134,50 +200,40 @@ def evaluate(
     results: list[EvalResult] = []
 
     for conv in conversations:
-        queries = eval_queries.get(conv.conversation_id, [])
-        if not queries:
-            logger.warning("No eval queries for %s — skipping", conv.conversation_id)
-            continue
+        queries = eval_queries.get(conv.conversation_id) or select_queries(
+            conv, model=config.summarisation_model
+        )
+        logger.info(
+            "Queries for %s: %s",
+            conv.conversation_id,
+            " | ".join(q.query_text[:50] for q in queries),
+        )
 
         for eq in queries:
             logger.info(
-                "Evaluating %s | query_pos=%d | %s",
-                conv.conversation_id, eq.query_position, eq.query_text[:60]
+                "Evaluating %s | pos=%d | %s",
+                conv.conversation_id, eq.query_position, eq.query_text[:60],
             )
-
             try:
                 result = _evaluate_one(conv, eq, config)
                 results.append(result)
                 _log_result(result)
             except Exception as e:
-                logger.error(
-                    "Evaluation failed for %s / pos=%d: %s",
-                    conv.conversation_id, eq.query_position, e
-                )
+                logger.error("Failed %s / pos=%d: %s", conv.conversation_id, eq.query_position, e)
 
     if not results:
         logger.warning("No results collected.")
         return pd.DataFrame()
 
     df = pd.DataFrame([vars(r) for r in results])
-
-    # Summary row
     _print_summary(df)
-
     return df
 
 
-def _evaluate_one(
-    conv: Conversation,
-    eq:   EvalQuery,
-    config: OptimizerConfig,
-) -> EvalResult:
-
-    # Full context baseline
+def _evaluate_one(conv: Conversation, eq: EvalQuery, config: OptimizerConfig) -> EvalResult:
     full_thread = full_context(conv, eq.query_position)
     full_tokens = _token_count(full_thread)
 
-    # Optimised context
     opt_thread, assembly_stats, latency_ms = compress(
         conversation=conv,
         query=eq.query_text,
@@ -186,16 +242,11 @@ def _evaluate_one(
     )
     opt_tokens = _token_count(opt_thread)
 
-    token_reduction = (
-        (full_tokens - opt_tokens) / full_tokens * 100
-        if full_tokens > 0 else 0.0
-    )
+    token_reduction = (full_tokens - opt_tokens) / full_tokens * 100 if full_tokens > 0 else 0.0
 
-    # Generate answers
     answer_full = _generate_answer(full_thread, eq.query_text, config.judge_model)
     answer_opt  = _generate_answer(opt_thread,  eq.query_text, config.judge_model)
 
-    # Judge both answers
     scores_full, scores_opt = judge_pair(
         query=eq.query_text,
         answer_full=answer_full,
@@ -205,17 +256,12 @@ def _evaluate_one(
         model=config.judge_model,
     )
 
-    # BERTScore
-    bertscore = compute_bertscore(answer_full, answer_opt)
+    bertscore  = compute_bertscore(answer_full, answer_opt)
+    history    = conv.turns[:eq.query_position]
+    lm_recall  = landmark_recall(history)
 
-    # Landmark recall over history
-    history = conv.turns[:eq.query_position]
-    lm_recall = landmark_recall(history)
-
-    # Compression %
-    total = len(history)
+    total      = len(history)
     compressed = sum(1 for t in history if t.disposition == "COMPRESS")
-    compression_pct = (compressed / total * 100) if total > 0 else 0.0
 
     return EvalResult(
         conversation_id=conv.conversation_id,
@@ -230,7 +276,7 @@ def _evaluate_one(
         delta_quality=round(scores_opt.mean - scores_full.mean, 2),
         bertscore_f1=round(bertscore, 3) if bertscore is not None else None,
         landmark_recall=round(lm_recall, 3),
-        compression_pct=round(compression_pct, 1),
+        compression_pct=round(compressed / total * 100, 1) if total > 0 else 0.0,
         integrity_repairs=assembly_stats.integrity_repairs,
         latency_ms=round(latency_ms, 1),
     )
@@ -267,9 +313,8 @@ def _print_summary(df: pd.DataFrame) -> None:
     print(f"Compression:       {df['compression_pct'].mean():.1f}% turns (mean)")
     print(f"Latency:           {df['latency_ms'].mean():.0f}ms (mean)")
 
-    # Acceptance bars
     print("\nACCEPTANCE:")
-    reduction_ok = (df["token_reduction_pct"].mean() >= 40) and (df["token_reduction_pct"].mean() <= 60)
+    reduction_ok = 40 <= df["token_reduction_pct"].mean() <= 60
     quality_ok   = df["delta_quality"].mean() >= 0
     bertscore_ok = df["bertscore_f1"].mean() >= 0.85 if df["bertscore_f1"].notna().any() else None
 

@@ -1,6 +1,6 @@
 # Test Suite
 
-44 tests across 5 files. No LLM API calls anywhere — all external dependencies are either mocked, use local fixtures, or test pure logic. Tests run in ~3 seconds.
+55 tests across 6 files. No LLM API calls anywhere — all external dependencies are either mocked, use local fixtures, or test pure logic. Tests run in ~3 seconds.
 
 ---
 
@@ -112,10 +112,10 @@ Tests `src/compression/compressor.py` and `src/compression/assembler.py` — tur
 | Test | What it checks |
 |---|---|
 | `test_landmark_always_keep` | A landmark turn (score=0.0) gets disposition=KEEP regardless of score — landmarks are always kept |
-| `test_high_score_keep` | A turn with score=0.8 gets disposition=KEEP (above factual high threshold of 0.6) |
-| `test_low_score_compress` | A turn with score=0.05 gets disposition=COMPRESS (below factual low threshold of 0.3) |
-| `test_mid_score_candidate` | A turn with score=0.45 gets disposition=CANDIDATE (between factual thresholds 0.3–0.6) |
-| `test_thresholds_vary_by_query_type` | Score of 0.5: KEEP for analytical (threshold=0.5), CANDIDATE for factual (threshold=0.6) — adaptive thresholds work |
+| `test_high_score_keep` | A turn with score=0.8 gets disposition=KEEP (above factual high threshold of 0.72) |
+| `test_low_score_compress` | A turn with score=0.05 gets disposition=COMPRESS (below factual low threshold of 0.45) |
+| `test_mid_score_candidate` | A turn with score=0.55 gets disposition=CANDIDATE (between factual thresholds 0.45–0.72) |
+| `test_thresholds_vary_by_query_type` | Score of 0.5: KEEP for analytical (threshold=0.65), CANDIDATE for factual (threshold=0.72) — adaptive thresholds work |
 
 **Run grouping**
 
@@ -161,6 +161,37 @@ Tests `src/evaluation/landmark_recall.py` and token counting logic. No LLM calls
 | `test_token_count_import` | tiktoken is installed and can encode text |
 | `test_token_reduction_formula` | The reduction formula `(full - opt) / full * 100` is arithmetically correct |
 | `test_token_reduction_within_target` | Reductions of 40%, 45%, 50%, 55%, 60% all fall within the target range |
+
+---
+
+## test_query_selection.py (9 tests)
+
+Tests `src/evaluation/harness.py` — the query pool and `select_queries()` function. OpenAI client is mocked throughout; no real API calls made.
+
+**Query pool sanity**
+
+| Test | What it checks |
+|---|---|
+| `test_query_pool_not_empty` | Pool contains at least 10 queries |
+| `test_query_pool_types` | Every query has a valid type (factual/analytical/preference) and non-trivial text |
+| `test_query_pool_has_all_types` | All three query types are represented in the pool |
+
+**select_queries — happy path**
+
+| Test | What it checks |
+|---|---|
+| `test_select_queries_returns_two` | Always returns exactly 2 queries |
+| `test_select_queries_returns_eval_query_objects` | Returns `EvalQuery` objects with valid position, text, and type |
+| `test_select_queries_uses_pool_text` | Selected queries use the exact text from QUERY_POOL at the returned indices |
+| `test_select_queries_query_position_at_75pct` | query_position is set to int(n_turns * 0.75), clamped to ≥5 |
+
+**select_queries — fallback on bad LLM response**
+
+| Test | What it checks |
+|---|---|
+| `test_select_queries_fallback_on_invalid_json` | Unparseable LLM response → falls back to default indices [0, 8] |
+| `test_select_queries_fallback_on_out_of_range_index` | Index 999 returned → falls back to defaults (index out of pool range) |
+| `test_select_queries_fallback_on_api_error` | API exception → falls back to defaults without raising |
 
 ---
 

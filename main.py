@@ -17,7 +17,6 @@ import os
 import sys
 import warnings
 
-# override=True ensures .env always wins over stale environment variables
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
@@ -115,15 +114,15 @@ def cmd_inspect(
 
     if dry_run:
         print("\n--- DRY RUN (no LLM calls) ---")
-        history       = conv.turns[:query_pos]
-        query_type    = classify_query(query)
-        scored        = score_turns(history, query, query_pos, config)
-        classified    = classify_turns(scored, query_type, config)
-        runs          = group_into_runs(classified)
-        keep          = sum(1 for t in classified if t.disposition in ("KEEP", "CANDIDATE"))
+        history        = conv.turns[:query_pos]
+        query_type     = classify_query(query)
+        scored         = score_turns(history, query, query_pos, config)
+        classified     = classify_turns(scored, query_type, config)
+        runs           = group_into_runs(classified)
+        keep           = sum(1 for t in classified if t.disposition in ("KEEP", "CANDIDATE"))
         compress_count = sum(1 for t in classified if t.disposition == "COMPRESS")
-        landmarks     = sum(1 for t in classified if t.is_landmark)
-        compress_runs = sum(1 for d, _ in runs if d == "COMPRESS")
+        landmarks      = sum(1 for t in classified if t.is_landmark)
+        compress_runs  = sum(1 for d, _ in runs if d == "COMPRESS")
         print(f"Landmarks detected: {landmarks}")
         print(f"Turns to KEEP:      {keep}")
         print(f"Turns to COMPRESS:  {compress_count} ({compress_runs} runs → {compress_runs} LLM calls)")
@@ -156,34 +155,18 @@ def cmd_evaluate(config: OptimizerConfig) -> None:
     if len(convs) < 10:
         logger.warning("Fewer than 10 conversations — evaluation may not be representative.")
     random.seed(42)
-    # Sample from conversations with ≥50 turns, matching the assignment's "50+ messages"
-    # specification. 102 such conversations exist in the flights corpus — sufficient for
-    # a representative 10-conversation sample.
-    # Falls back to the full ≥20-turn pool only if fewer than 10 long conversations exist.
     long_convs = [c for c in convs if len(c.turns) >= 50]
     pool = long_convs if len(long_convs) >= 10 else convs
-    logger.info(f"Evaluation pool: {len(pool)} conversations (≥50 turns preferred; using {'long' if pool is long_convs else 'full'} pool)")
+    logger.info(
+        "Evaluation pool: %d conversations (≥50 turns preferred; using %s pool)",
+        len(pool), "long" if pool is long_convs else "full",
+    )
     eval_convs = random.sample(pool, min(10, len(pool)))
-    eval_queries: dict[str, list[EvalQuery]] = {}
-    for conv in eval_convs:
-        n     = len(conv.turns)
-        q_pos = max(5, int(n * 0.75))
-        eval_queries[conv.conversation_id] = [
-            EvalQuery(
-                query_position=q_pos,
-                query_text="What flights were compared and what did the user decide?",
-                query_type="factual",
-            ),
-            EvalQuery(
-                query_position=q_pos,
-                query_text="Why did the user choose the flight they selected?",
-                query_type="analytical",
-            ),
-        ]
-    results_df = evaluate(eval_convs, eval_queries, config)
-    out_path   = "eval_results.csv"
-    results_df.to_csv(out_path, index=False)
-    print(f"\nResults saved to {out_path}")
+    # Pass empty dict — harness will call select_queries() per conversation
+    # to pick the two most answerable questions from QUERY_POOL.
+    results_df = evaluate(eval_convs, {}, config)
+    results_df.to_csv("eval_results.csv", index=False)
+    print("\nResults saved to eval_results.csv")
 
 
 def main() -> None:
