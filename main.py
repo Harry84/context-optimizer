@@ -76,6 +76,9 @@ def cmd_stats(config: OptimizerConfig) -> None:
     print(f"Conversations (≥{config.min_turns} turns): {len(convs)}")
     if turn_counts:
         print(f"Turn counts — min: {min(turn_counts)} | max: {max(turn_counts)} | mean: {sum(turn_counts)/len(turn_counts):.1f}")
+        for t in [30, 40, 50, 60]:
+            count = sum(1 for c in turn_counts if c >= t)
+            print(f"  >= {t} turns: {count} ({100*count/len(turn_counts):.1f}%)")
 
 
 def cmd_inspect(
@@ -153,7 +156,14 @@ def cmd_evaluate(config: OptimizerConfig) -> None:
     if len(convs) < 10:
         logger.warning("Fewer than 10 conversations — evaluation may not be representative.")
     random.seed(42)
-    eval_convs = random.sample(convs, min(10, len(convs)))
+    # Sample from conversations with ≥50 turns, matching the assignment's "50+ messages"
+    # specification. 102 such conversations exist in the flights corpus — sufficient for
+    # a representative 10-conversation sample.
+    # Falls back to the full ≥20-turn pool only if fewer than 10 long conversations exist.
+    long_convs = [c for c in convs if len(c.turns) >= 50]
+    pool = long_convs if len(long_convs) >= 10 else convs
+    logger.info(f"Evaluation pool: {len(pool)} conversations (≥50 turns preferred; using {'long' if pool is long_convs else 'full'} pool)")
+    eval_convs = random.sample(pool, min(10, len(pool)))
     eval_queries: dict[str, list[EvalQuery]] = {}
     for conv in eval_convs:
         n     = len(conv.turns)

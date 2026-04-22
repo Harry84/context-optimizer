@@ -1,7 +1,7 @@
 """
 Stage 4b — LLM Summarisation.
 
-Summarises a COMPRESS run into a concise summary string.
+Summarises a COMPRESS run into a single ultra-concise sentence.
 Short or trivial runs are dropped rather than summarised.
 """
 
@@ -15,8 +15,8 @@ from src.ingestion.models import Turn
 _client: OpenAI | None = None
 
 # Minimum total characters in a COMPRESS run before we bother summarising.
-# Runs shorter than this are just dropped — they're pure filler.
-MIN_CHARS_TO_SUMMARISE = 80
+# Runs shorter than this are dropped entirely — summary would be longer than original.
+MIN_CHARS_TO_SUMMARISE = 200
 
 
 def _get_client() -> OpenAI:
@@ -44,43 +44,37 @@ def summarise_run(
     model: str = "gpt-4o-mini",
 ) -> str:
     """
-    Summarise a COMPRESS run into 1-2 sentences.
+    Summarise a COMPRESS run into one tight phrase (≤15 words).
 
-    Returns empty string if the run is too short to be worth summarising
-    (caller will drop it entirely from the output).
-
-    Only summarise if the run contains enough content to justify an LLM call —
-    trivial filler like "Okay." / "Sure." / "Hold on." is just dropped.
+    Returns empty string if the run is too short or contains nothing
+    meaningful — caller drops it entirely from the output.
     """
     if not turns:
         return ""
 
-    # Drop trivial runs — not worth an LLM call or a summary placeholder
     if _total_chars(turns) < MIN_CHARS_TO_SUMMARISE:
         return ""
 
     formatted = _format_turns(turns)
-    prompt = f"""The following turns are from a {domain} booking conversation.
-Summarise in 1-2 concise sentences. Only include information that would be
-useful context for answering a question about this conversation later.
-Omit greetings, filler, and repeated content. If there is nothing meaningful
-to preserve, respond with exactly: SKIP
+    prompt = f"""Summarise these {domain} booking conversation turns in ONE short phrase of at most 15 words.
+Only include facts useful for answering questions later (destinations, dates, prices, decisions).
+Omit greetings, filler, confirmations, and repeated content entirely.
+If there are no useful facts, reply with exactly: SKIP
 
 Turns:
 {formatted}
 
-Summary:"""
+Summary (≤15 words):"""
 
     client = _get_client()
     response = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
-        max_tokens=80,
+        max_tokens=30,
     )
     result = response.choices[0].message.content.strip()
 
-    # If model says nothing meaningful, drop it
     if result.upper() == "SKIP" or not result:
         return ""
 

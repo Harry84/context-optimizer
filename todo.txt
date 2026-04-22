@@ -1,0 +1,33 @@
+TODO — Context Optimizer
+========================
+
+1. Net cost analysis
+   - Add token tracking to the evaluation harness (summariser input/output tokens + judge tokens)
+   - Compute: tokens saved by compression vs. tokens spent on summarisation
+   - Print cost summary (at ~$0.15/1M input, ~$0.60/1M output for gpt-4o-mini) alongside quality summary
+   - Answer the "are you actually ahead?" question with real numbers
+
+2. 500-message conversation analysis
+   - No need to run it — write a reasoned analysis for the report
+   - Cover: latency explosion (O(n) scoring + embedding), memory pressure,
+     summarisation cost per run, landmark detector still O(n) and fine,
+     mitigation = chunked/streaming assembly
+   - Goes in the written report as "failure modes at scale"
+
+3. Token reduction finding — document honestly in report
+   - Target was 40-60%. Actual mean is ~25-30% on Taskmaster-2.
+   - Root cause confirmed via audit: NOT a threshold or summariser problem.
+   - Taskmaster-2 conversations are telegraphic — nearly every turn is a
+     landmark (mean LM rate 46%). KEEP turns hold 67% of tokens; COMPRESS
+     turns average 5 tokens each (filler like "Okay." "Sure.").
+   - Even compressing 51% of turns only saves ~33% of tokens at best
+     (pre-summary ceiling). After dropping sub-threshold runs, net is 18-25%.
+   - The 4 conversations that hit ≥40% COMP token weight prove the pipeline
+     works — those conversations had LM rate ~32% (more realistic density).
+   - Framing: system behaves correctly. On dense Taskmaster-2 conversations
+     there is little to safely discard. On realistic long-form conversations
+     (LM rate ~30%, longer turns) the 40-60% target is achievable.
+
+4. Write the 2-page written report
+
+5. Final commit

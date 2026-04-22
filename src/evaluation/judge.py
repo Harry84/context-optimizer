@@ -1,14 +1,12 @@
 """
-LLM-as-Judge with order-swap bias mitigation.
-
-Evaluates answer quality on 4 dimensions (1-10 each):
+LLM-as-Judge — evaluates answer quality on 4 dimensions (1-10 each):
   - Correctness
   - Completeness
   - Landmark consistency
   - Hallucination (10 = no hallucination)
 
-Order-swap: each pair is judged twice with answers swapped.
-Scores are averaged to cancel positional bias.
+Uses response_format=json_object to guarantee parseable output.
+Each answer is evaluated independently against its own context.
 """
 
 from __future__ import annotations
@@ -70,7 +68,7 @@ Answer being evaluated:
 {answer}
 ---
 
-Return ONLY a JSON object with these exact keys and integer values 1-10:
+Return a JSON object with these exact keys and integer values 1-10:
 {{"correctness": N, "completeness": N, "landmark_consistency": N, "hallucination": N}}"""
 
 
@@ -80,10 +78,10 @@ def _judge_once(
     context_summary: str,
     model: str,
 ) -> JudgeScores:
-    """Single judge call — no order swapping."""
+    """Single judge call using JSON mode for reliable parsing."""
     prompt = _RUBRIC_PROMPT.format(
         query=query,
-        context_summary=context_summary[:2000],  # guard against huge contexts
+        context_summary=context_summary[:2000],
         answer=answer,
     )
     client = _get_client()
@@ -92,6 +90,7 @@ def _judge_once(
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
         max_tokens=100,
+        response_format={"type": "json_object"},
     )
     raw = response.choices[0].message.content.strip()
 
@@ -126,11 +125,9 @@ def judge_pair(
     model: str = "gpt-4o",
 ) -> tuple[JudgeScores, JudgeScores]:
     """
-    Judge both answers with order-swap bias mitigation.
-
-    Evaluates each answer against the context it was generated from.
-    Each pair is judged once — the judge sees one answer at a time,
-    not both simultaneously, so order bias does not apply here.
+    Judge both answers independently against their own context.
+    Each answer is evaluated once — no side-by-side comparison,
+    so positional bias does not apply.
 
     Returns:
         (scores_full, scores_opt) — JudgeScores for each answer.
@@ -138,10 +135,7 @@ def judge_pair(
     full_ctx = _context_summary(full_thread)
     opt_ctx  = _context_summary(opt_thread)
 
-    # Judge full-context answer against full context
     scores_full = _judge_once(query, answer_full, full_ctx, model)
-
-    # Judge optimised answer against optimised context
-    scores_opt  = _judge_once(query, answer_opt, opt_ctx, model)
+    scores_opt  = _judge_once(query, answer_opt,  opt_ctx,  model)
 
     return scores_full, scores_opt

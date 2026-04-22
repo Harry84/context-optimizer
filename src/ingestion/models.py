@@ -54,11 +54,14 @@ class OptimizerConfig:
         "preference": {"keyword": 0.2, "semantic": 0.3, "recency": 0.5},
     })
 
-    # Compression thresholds per query type
+    # Compression thresholds per query type.
+    # Raised from (0.6/0.3), (0.5/0.25), (0.45/0.2) to push more turns into COMPRESS.
+    # Taskmaster-2 turns are short (~8 tokens each) so we need aggressive compression
+    # to hit 40-60% token reduction — only the highest-scoring turns survive verbatim.
     thresholds: dict = field(default_factory=lambda: {
-        "factual":    {"high": 0.6, "low": 0.3},
-        "analytical": {"high": 0.5, "low": 0.25},
-        "preference": {"high": 0.45, "low": 0.2},
+        "factual":    {"high": 0.72, "low": 0.45},
+        "analytical": {"high": 0.65, "low": 0.40},
+        "preference": {"high": 0.60, "low": 0.35},
     })
 
     # Model names
