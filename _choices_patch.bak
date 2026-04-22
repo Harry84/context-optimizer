@@ -1,3 +1,0 @@
-    parser.add_argument("--compression-strategy", default="turn",
-                        choices=["turn", "sentence", "topk", "topk-sentence", "chunk"],
-                        help="turn=v1, sentence=v2, topk=v3, topk-sentence=v4, chunk=v5")
