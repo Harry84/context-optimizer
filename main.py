@@ -2,29 +2,26 @@
 Context Optimizer — CLI entry point.
 
 Usage:
-    # Run full evaluation pipeline
-    python main.py evaluate
-
-    # Inspect a single conversation interactively
-    python main.py inspect --conv-id dlg-cbfc519d-93e3-404d-9db5-c5fe35a5b765
-
-    # Show corpus stats
     python main.py stats
+    python main.py inspect --conv-id dlg-xxx --query "..." --query-pos 50
+    python main.py inspect --conv-id dlg-xxx --query "..." --query-pos 50 --dry-run
+    python main.py evaluate
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 
-from src.compression.pipeline import compress, full_context
-from src.evaluation.harness import EvalQuery, evaluate
 from src.ingestion.loader import load_from_config
 from src.ingestion.models import OptimizerConfig
 from src.landmarks.detector import get_detector
 from src.scoring.query_classifier import classify_query
+from src.compression.assembler import format_full_context
+from src.compression.compressor import classify_turns, group_into_runs
+from src.compression.pipeline import compress, full_context
+from src.evaluation.harness import EvalQuery, evaluate
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,11 +41,22 @@ def cmd_stats(config: OptimizerConfig) -> None:
         print(f"Turn counts — min: {min(turn_counts)} | max: {max(turn_counts)} | mean: {sum(turn_counts)/len(turn_counts):.1f}")
 
 
-def cmd_inspect(config: OptimizerConfig, conv_id: str, query: str, query_pos: int) -> None:
+def cmd_inspect(
+    config: OptimizerConfig,
+    conv_id: str,
+    query: str,
+    query_pos: int,
+    dry_run: bool = False,
+) -> None:
     """
-    Run compression on a single conversation and print the result.
-    Useful for manual inspection before running full evaluation.
+    Inspect compression on a single conversation.
+
+    dry_run=True: skip LLM summarisation — shows which turns would be kept
+    vs compressed, without making any API calls. Useful for verifying the
+    pipeline logic before spending API credits.
     """
+    from src.scoring.scorer import score_turns
+
     convs = load_from_config(config)
     conv  = next((c for c in convs if c.conversation_id == conv_id), None)
 
@@ -66,45 +74,61 @@ def cmd_inspect(config: OptimizerConfig, conv_id: str, query: str, query_pos: in
     detector = get_detector(config)
     detector.detect(conv)
 
-    # Full context
+    # Full context baseline
     full_thread = full_context(conv, query_pos)
     print(f"\nFull context: {len(full_thread)} turns")
 
-    # Optimised
-    opt_thread, stats, latency = compress(conv, query, query_pos, config)
-    print(f"Optimised:    {len(opt_thread)} turns | {latency:.0f}ms")
-    print(f"Kept verbatim: {stats.kept_verbatim} | Summaries: {stats.summary_turns} | Repairs: {stats.integrity_repairs}")
+    if dry_run:
+        # Show scoring and disposition without calling the LLM
+        print("\n--- DRY RUN (no LLM calls) ---")
+        history = conv.turns[:query_pos]
+        query_type = classify_query(query)
 
-    print("\n--- OPTIMISED CONTEXT ---")
-    for msg in opt_thread:
-        role = msg["role"].upper()
-        print(f"[{role}] {msg['content'][:120]}")
+        scored = score_turns(history, query, query_pos, config)
+        classified = classify_turns(scored, query_type, config)
+        runs = group_into_runs(classified)
+
+        keep = sum(1 for t in classified if t.disposition in ("KEEP", "CANDIDATE"))
+        compress_count = sum(1 for t in classified if t.disposition == "COMPRESS")
+        landmarks = sum(1 for t in classified if t.is_landmark)
+        compress_runs = sum(1 for d, _ in runs if d == "COMPRESS")
+
+        print(f"Landmarks detected: {landmarks}")
+        print(f"Turns to KEEP:      {keep}")
+        print(f"Turns to COMPRESS:  {compress_count} ({compress_runs} runs → {compress_runs} LLM calls)")
+        print(f"Est. token reduction: ~{100*compress_count/len(history):.0f}%")
+
+        print("\n--- PER-TURN DISPOSITIONS ---")
+        for turn in classified:
+            lm = f" [{turn.landmark_type.upper()}]" if turn.is_landmark else ""
+            print(f"  [{turn.disposition:>8}] [{turn.speaker[:4]}] (score={turn.score:.2f}){lm} {turn.text[:80]}")
+
+    else:
+        # Full compression with LLM summarisation
+        opt_thread, stats, latency = compress(conv, query, query_pos, config)
+        print(f"Optimised:     {len(opt_thread)} turns | {latency:.0f}ms")
+        print(f"Kept verbatim: {stats.kept_verbatim} | Summaries: {stats.summary_turns} | Repairs: {stats.integrity_repairs}")
+
+        print("\n--- OPTIMISED CONTEXT ---")
+        for msg in opt_thread:
+            role = msg["role"].upper()
+            print(f"[{role}] {msg['content'][:120]}")
 
 
 def cmd_evaluate(config: OptimizerConfig) -> None:
-    """
-    Run evaluation on a hardcoded set of queries across sampled conversations.
-
-    In a full implementation, eval_queries would be loaded from a file.
-    Here we construct a minimal set for demonstration.
-    """
+    """Run evaluation across 10 sampled conversations."""
+    import random
     convs = load_from_config(config)
 
     if len(convs) < 10:
         logger.warning("Fewer than 10 conversations — evaluation may not be representative.")
 
-    # Sample 10 conversations
-    import random
     random.seed(42)
     eval_convs = random.sample(convs, min(10, len(convs)))
 
-    # For each conversation, construct evaluation queries at meaningful positions.
-    # Queries are placed at the turn where a booking decision is being made —
-    # requiring understanding of earlier constraint-setting turns.
     eval_queries: dict[str, list[EvalQuery]] = {}
     for conv in eval_convs:
         n = len(conv.turns)
-        # Place query at 75% through the conversation (post-comparison, pre-close)
         q_pos = max(5, int(n * 0.75))
         eval_queries[conv.conversation_id] = [
             EvalQuery(
@@ -120,8 +144,6 @@ def cmd_evaluate(config: OptimizerConfig) -> None:
         ]
 
     results_df = evaluate(eval_convs, eval_queries, config)
-
-    # Save results
     out_path = "eval_results.csv"
     results_df.to_csv(out_path, index=False)
     print(f"\nResults saved to {out_path}")
@@ -131,19 +153,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Context Optimizer")
     sub = parser.add_subparsers(dest="command")
 
-    # Stats command
     sub.add_parser("stats", help="Show corpus statistics")
 
-    # Inspect command
     p_inspect = sub.add_parser("inspect", help="Inspect a single conversation")
-    p_inspect.add_argument("--conv-id",   required=True, help="Conversation ID")
-    p_inspect.add_argument("--query",     required=True, help="Query string")
-    p_inspect.add_argument("--query-pos", required=True, type=int, help="Query position (turn index)")
+    p_inspect.add_argument("--conv-id",   required=True)
+    p_inspect.add_argument("--query",     required=True)
+    p_inspect.add_argument("--query-pos", required=True, type=int)
+    p_inspect.add_argument("--dry-run",   action="store_true",
+                           help="Show scoring/dispositions without LLM calls")
 
-    # Evaluate command
     sub.add_parser("evaluate", help="Run full evaluation pipeline")
 
-    # Global config overrides
     parser.add_argument("--data-path",  default="data/taskmaster2/flights.json")
     parser.add_argument("--min-turns",  default=20, type=int)
     parser.add_argument("--detector",   default="rules", choices=["rules", "embedding", "llm"])
@@ -163,7 +183,8 @@ def main() -> None:
     if args.command == "stats":
         cmd_stats(config)
     elif args.command == "inspect":
-        cmd_inspect(config, args.conv_id, args.query, args.query_pos)
+        cmd_inspect(config, args.conv_id, args.query, args.query_pos,
+                    dry_run=getattr(args, "dry_run", False))
     elif args.command == "evaluate":
         cmd_evaluate(config)
     else:

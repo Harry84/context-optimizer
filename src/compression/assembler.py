@@ -5,9 +5,8 @@ Assembles the final [{role, content}] thread from KEEP runs
 and SUMMARY placeholders for COMPRESS runs.
 
 Enforces structural integrity:
-  - No consecutive same-role turns
-  - No orphaned user turns (USER with no preceding ASSISTANT)
-  - Valid alternating role structure expected by LLMs
+  - No consecutive same-role turns (merged)
+  - Thread must start with a user turn
 """
 
 from __future__ import annotations
@@ -40,13 +39,6 @@ def assemble(
 
     KEEP runs   → verbatim turns in chronological order.
     COMPRESS runs → single synthetic assistant [SUMMARY: ...] turn.
-
-    Args:
-        runs:      List of (disposition, [Turn]) from compressor.group_into_runs().
-        summaries: Mapping from id(turns_list) → summary string.
-
-    Returns:
-        (thread, stats)
     """
     stats = AssemblyStats()
     thread: list[dict] = []
@@ -73,6 +65,9 @@ def assemble(
     thread, repairs = _integrity_check(thread)
     stats.integrity_repairs = repairs
 
+    if repairs > 0:
+        logger.debug("Assembly integrity: %d repair(s) made", repairs)
+
     return thread, stats
 
 
@@ -80,15 +75,9 @@ def _integrity_check(thread: list[dict]) -> tuple[list[dict], int]:
     """
     Validate and repair structural issues in the assembled thread.
 
-    Repairs applied:
+    Repairs:
     1. Consecutive same-role turns → merge content with a space
     2. Thread starts with an assistant turn → prepend placeholder user turn
-
-    Note: a thread ending with a user turn is normal — the current query
-    is posed after the context is assembled.
-
-    Returns:
-        (repaired_thread, repair_count)
     """
     if not thread:
         return thread, 0
@@ -99,9 +88,10 @@ def _integrity_check(thread: list[dict]) -> tuple[list[dict], int]:
     merged: list[dict] = []
     for msg in thread:
         if merged and merged[-1]["role"] == msg["role"]:
-            merged[-1]["content"] += " " + msg["content"]
+            # Only merge if content is meaningfully different
+            if msg["content"].strip() and msg["content"].strip() != merged[-1]["content"].strip():
+                merged[-1]["content"] += " " + msg["content"]
             repairs += 1
-            logger.debug("Merged consecutive %s turns", msg["role"])
         else:
             merged.append({"role": msg["role"], "content": msg["content"]})
 
@@ -109,10 +99,6 @@ def _integrity_check(thread: list[dict]) -> tuple[list[dict], int]:
     if merged and merged[0]["role"] == "assistant":
         merged.insert(0, {"role": "user", "content": "[conversation start]"})
         repairs += 1
-        logger.debug("Inserted placeholder user turn at start")
-
-    if repairs > 0:
-        logger.info("Assembly integrity: %d repair(s) made", repairs)
 
     return merged, repairs
 
@@ -126,6 +112,5 @@ def format_full_context(turns: list[Turn]) -> list[dict]:
         {"role": "user" if t.speaker == "USER" else "assistant", "content": t.text}
         for t in turns
     ]
-    # Apply integrity check — fixes any structural issues in raw data too
     thread, _ = _integrity_check(thread)
     return thread
