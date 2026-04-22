@@ -17,8 +17,9 @@ import os
 import sys
 import warnings
 
+# override=True ensures .env always wins over stale environment variables
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 if os.environ.get("HF_TOKEN"):
     from huggingface_hub import login as hf_login
@@ -46,7 +47,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-DISPLAY_WIDTH = 100  # characters per line for content display
+DISPLAY_WIDTH = 100
 
 
 def _print_thread(thread: list[dict], title: str) -> None:
@@ -57,7 +58,6 @@ def _print_thread(thread: list[dict], title: str) -> None:
         role    = msg["role"].upper()
         content = msg["content"]
         label   = f"[{role}]"
-        # Wrap long content across multiple lines
         indent  = " " * (len(label) + 1)
         lines   = []
         while content:
@@ -112,15 +112,15 @@ def cmd_inspect(
 
     if dry_run:
         print("\n--- DRY RUN (no LLM calls) ---")
-        history    = conv.turns[:query_pos]
-        query_type = classify_query(query)
+        history       = conv.turns[:query_pos]
+        query_type    = classify_query(query)
         scored        = score_turns(history, query, query_pos, config)
         classified    = classify_turns(scored, query_type, config)
         runs          = group_into_runs(classified)
-        keep           = sum(1 for t in classified if t.disposition in ("KEEP", "CANDIDATE"))
+        keep          = sum(1 for t in classified if t.disposition in ("KEEP", "CANDIDATE"))
         compress_count = sum(1 for t in classified if t.disposition == "COMPRESS")
-        landmarks      = sum(1 for t in classified if t.is_landmark)
-        compress_runs  = sum(1 for d, _ in runs if d == "COMPRESS")
+        landmarks     = sum(1 for t in classified if t.is_landmark)
+        compress_runs = sum(1 for d, _ in runs if d == "COMPRESS")
         print(f"Landmarks detected: {landmarks}")
         print(f"Turns to KEEP:      {keep}")
         print(f"Turns to COMPRESS:  {compress_count} ({compress_runs} runs → {compress_runs} LLM calls)")
