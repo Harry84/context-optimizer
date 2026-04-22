@@ -1,9 +1,33 @@
 [project]
 name = "context-optimizer"
 version = "0.1.0"
-description = "Add your description here"
+description = "Intelligent context optimizer for multi-turn LLM agents"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "datasets>=4.8.4",
+    # Core pipeline
+    "sentence-transformers>=3.0.0",   # local embeddings (all-MiniLM-L6-v2)
+    "scikit-learn>=1.4.0",            # TF-IDF keyword scoring
+    "numpy>=1.26.0",                  # score normalisation
+    "tiktoken>=0.7.0",                # token counting
+    "openai>=1.30.0",                 # summarisation + judge LLM
+
+    # Evaluation
+    "bert-score>=0.3.13",             # BERTScore F1 semantic preservation
+    "pandas>=2.2.0",                  # evaluation results table
+
+    # Data download (not runtime)
+    "datasets>=2.19.0",               # HuggingFace datasets (download only)
+    "huggingface-hub>=0.23.0",        # raw file download for dialog2flow
+
+    # Dev / test
+    "pytest>=8.0.0",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
