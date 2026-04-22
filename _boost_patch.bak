@@ -1,0 +1,1 @@
+        boost    = config.landmark_boost * indiv_s if turn.is_landmark else 0.0
