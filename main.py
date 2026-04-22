@@ -8,8 +8,10 @@ Usage:
     python main.py inspect --conv-id dlg-xxx --query "..." --query-pos 50 --compare
     python main.py --compression-strategy sentence inspect --conv-id dlg-xxx --query "..." --query-pos 50
     python main.py --compression-strategy topk inspect --conv-id dlg-xxx --query "..." --query-pos 50
+    python main.py --compression-strategy topk-sentence inspect --conv-id dlg-xxx --query "..." --query-pos 50
     python main.py evaluate
     python main.py --compression-strategy topk evaluate
+    python main.py --compression-strategy topk-sentence evaluate
 """
 
 from __future__ import annotations
@@ -126,11 +128,8 @@ def cmd_inspect(
         if config.compression_strategy == "sentence":
             from src.compression.sentence_compressor import classify_turns_sentence_level
             runs = classify_turns_sentence_level(
-                history=scored,
-                query=query,
-                query_position=query_pos,
-                query_type=query_type,
-                config=config,
+                history=scored, query=query, query_position=query_pos,
+                query_type=query_type, config=config,
             )
             keep_count     = sum(len(ts) for d, ts in runs if d == "KEEP")
             compress_count = sum(len(ts) for d, ts in runs if d == "COMPRESS")
@@ -144,25 +143,34 @@ def cmd_inspect(
                 for t in run_turns:
                     lm = " [LM]" if t.is_landmark else ""
                     print(f"  [{disposition:>8}] [{t.speaker[:4]}] (score={t.score:.2f}){lm} {t.text[:75]}")
-        elif config.compression_strategy == "topk":
-            from src.compression.topk_compressor import classify_turns_topk
-            classified     = classify_turns_topk(scored, query_type, config)
-            runs           = group_into_runs(classified)
-            keep           = sum(1 for t in classified if t.disposition in ("KEEP", "CANDIDATE"))
-            compress_count = sum(1 for t in classified if t.disposition == "COMPRESS")
-            landmarks      = sum(1 for t in classified if t.is_landmark)
+        elif config.compression_strategy in ("topk", "topk-sentence"):
+            if config.compression_strategy == "topk":
+                from src.compression.topk_compressor import classify_turns_topk
+                classified = classify_turns_topk(scored, query_type, config)
+                runs       = group_into_runs(classified)
+                non_lm     = sum(1 for t in classified if not t.is_landmark)
+            else:
+                # topk-sentence: show as turn dispositions for simplicity
+                from src.compression.topk_sentence_compressor import topk_sentence_runs
+                runs       = topk_sentence_runs(scored, query, query_pos, query_type, config)
+                classified = scored  # use scored turns for landmark count
+                non_lm     = sum(1 for t in scored if not t.is_landmark)
+
+            keep           = sum(len(ts) for d, ts in runs if d == "KEEP")
+            compress_count = sum(len(ts) for d, ts in runs if d == "COMPRESS")
             compress_runs  = sum(1 for d, _ in runs if d == "COMPRESS")
-            non_lm         = sum(1 for t in classified if not t.is_landmark)
+            landmarks      = sum(1 for t in history if t.is_landmark)
             k              = max(1, math.ceil(config.topk_fraction[query_type] * non_lm))
             fraction       = config.topk_fraction[query_type]
-            print(f"Landmarks detected: {landmarks}  |  fraction={fraction:.0%}  K={k}/{non_lm} non-landmark turns kept")
-            print(f"Turns to KEEP:      {keep}")
-            print(f"Turns to COMPRESS:  {compress_count} ({compress_runs} runs → {compress_runs} LLM calls)")
-            print(f"Est. token reduction: ~{100*compress_count/len(history):.0f}%")
-            print("\n--- PER-TURN DISPOSITIONS ---")
-            for turn in classified:
-                lm = f" [{turn.landmark_type.upper()}]" if turn.is_landmark else ""
-                print(f"  [{turn.disposition:>8}] [{turn.speaker[:4]}] (score={turn.score:.2f}){lm} {turn.text[:80]}")
+            print(f"Landmarks detected: {landmarks}  |  fraction={fraction:.0%}  K≈{k}/{non_lm} non-landmark units")
+            print(f"Units to KEEP:      {keep}")
+            print(f"Units to COMPRESS:  {compress_count} ({compress_runs} runs → {compress_runs} LLM calls)")
+            print(f"Est. token reduction: ~{100*compress_count/(keep+compress_count):.0f}%")
+            print("\n--- PER-RUN BREAKDOWN ---")
+            for disposition, run_turns in runs:
+                for t in run_turns:
+                    lm = " [LM]" if t.is_landmark else ""
+                    print(f"  [{disposition:>8}] [{t.speaker[:4]}] (score={t.score:.2f}){lm} {t.text[:75]}")
         else:
             classified     = classify_turns(scored, query_type, config)
             runs           = group_into_runs(classified)
@@ -210,7 +218,7 @@ def cmd_evaluate(config: OptimizerConfig) -> None:
     )
     eval_convs = random.sample(pool, min(10, len(pool)))
     results_df = evaluate(eval_convs, {}, config)
-    suffix = f"_{config.compression_strategy}" if config.compression_strategy != "turn" else ""
+    suffix = f"_{config.compression_strategy.replace('-', '_')}" if config.compression_strategy != "turn" else ""
     out_path = f"eval_results{suffix}.csv"
     results_df.to_csv(out_path, index=False)
     print(f"\nResults saved to {out_path}")
@@ -239,8 +247,8 @@ def main() -> None:
     parser.add_argument("--summariser",  default="gpt-4o-mini")
     parser.add_argument("--judge",       default="gpt-4o")
     parser.add_argument("--compression-strategy", default="turn",
-                        choices=["turn", "sentence", "topk"],
-                        help="turn=v1 threshold-based, sentence=v2 sentence-level, topk=v3 proportional top-K")
+                        choices=["turn", "sentence", "topk", "topk-sentence"],
+                        help="turn=v1, sentence=v2, topk=v3, topk-sentence=v4")
 
     args   = parser.parse_args()
     config = OptimizerConfig(
