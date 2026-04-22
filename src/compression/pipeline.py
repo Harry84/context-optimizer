@@ -2,12 +2,12 @@
 Full compression pipeline entry point.
 
 compress() is the single function called by the evaluation harness.
-It takes a Conversation, a query string, and the query's position in
-the conversation, and returns an optimised [{role, content}] thread.
 
-Compression strategy is selected via config.compression_strategy:
-  "turn"     — v1 turn-level (compressor.py)
-  "sentence" — v2 sentence-level (sentence_compressor.py)
+Compression strategy selected via config.compression_strategy:
+  "turn"          — v1 threshold-based turn-level
+  "sentence"      — v2 sentence-level within landmark turns
+  "topk"          — v3 proportional top-K turn retrieval
+  "topk-sentence" — v4 top-K + sentence splitting of landmark turns
 """
 
 from __future__ import annotations
@@ -29,29 +29,17 @@ def compress(
     query_position: int,
     config: OptimizerConfig,
 ) -> tuple[list[dict], AssemblyStats, float]:
-    """
-    Full compression pipeline for a single (conversation, query) pair.
-
-    Only turns[0..query_position-1] are used as context.
-    Turn at query_position is the current query being answered.
-    Turns after query_position are ignored (not yet in history).
-    """
-    assert query_position > 0, "query_position must be > 0 (need at least one history turn)"
-    assert query_position <= len(conversation.turns), "query_position out of range"
+    assert query_position > 0
+    assert query_position <= len(conversation.turns)
 
     t_start = time.perf_counter()
 
-    # 1. Landmark detection (idempotent — safe to call multiple times)
     detector = get_detector(config)
     detector.detect(conversation)
 
-    # 2. Slice to history: turns 0..query_position-1 only.
-    history = conversation.turns[:query_position]
-
-    # 3. Classify query type (drives weights and thresholds).
+    history    = conversation.turns[:query_position]
     query_type = classify_query(query)
 
-    # 4. Score all history turns against the query.
     scored_history = score_turns(
         history=history,
         query=query,
@@ -59,10 +47,21 @@ def compress(
         config=config,
     )
 
-    # 5. Classify and group into runs — strategy selected via config.
     if config.compression_strategy == "sentence":
         from src.compression.sentence_compressor import classify_turns_sentence_level
         runs: list[Run] = classify_turns_sentence_level(
+            history=scored_history,
+            query=query,
+            query_position=query_position,
+            query_type=query_type,
+            config=config,
+        )
+    elif config.compression_strategy == "topk":
+        from src.compression.topk_compressor import topk_runs
+        runs = topk_runs(scored_history, query_type, config)
+    elif config.compression_strategy == "topk-sentence":
+        from src.compression.topk_sentence_compressor import topk_sentence_runs
+        runs = topk_sentence_runs(
             history=scored_history,
             query=query,
             query_position=query_position,
@@ -73,7 +72,6 @@ def compress(
         classified = classify_turns(scored_history, query_type, config)
         runs = group_into_runs(classified)
 
-    # 6. Summarise each COMPRESS run (one LLM call per run).
     summaries: dict[int, str] = {}
     for disposition, run_turns in runs:
         if disposition == "COMPRESS":
@@ -83,11 +81,8 @@ def compress(
                 model=config.summarisation_model,
             )
 
-    # 7. Assemble final thread.
     thread, stats = assemble(runs, summaries)
-
     latency_ms = (time.perf_counter() - t_start) * 1000
-
     return thread, stats, latency_ms
 
 
@@ -95,6 +90,5 @@ def full_context(
     conversation: Conversation,
     query_position: int,
 ) -> list[dict]:
-    """Return the full uncompressed context for baseline comparison."""
     history = conversation.turns[:query_position]
     return format_full_context(history)

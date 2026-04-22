@@ -12,15 +12,12 @@ class Turn:
     speaker: str                        # "USER" or "ASSISTANT"
     text: str
     slots: list[str] = field(default_factory=list)
-                                        # Slot names from Taskmaster-2 annotations.
-                                        # EVALUATION GROUND TRUTH ONLY.
-                                        # Never read by landmark detector or scorer.
 
     # Set by landmark detector
     is_landmark: bool = False
-    landmark_type: str | None = None    # "intent" | "decision" | "action_item"
-    landmark_reason: str = ""           # Human-readable reason — auditable
-    promoted: bool = False              # True if promoted by cross-turn alignment
+    landmark_type: str | None = None
+    landmark_reason: str = ""
+    promoted: bool = False
 
     # Set by relevance scorer
     score: float = 0.0
@@ -40,16 +37,17 @@ class Conversation:
 @dataclass
 class OptimizerConfig:
     # Landmark detection
-    landmark_detector: str = "rules"    # "rules" | "embedding" | "llm"
+    landmark_detector: str = "rules"
 
     # Compression strategy
-    # "turn"     — v1: classify and compress whole turns (fast, safe)
-    # "sentence" — v2: split landmark turns into sentences, only KEEP
-    #              the landmark sentences, compress the filler around them
+    # "turn"          — v1: threshold-based turn-level
+    # "sentence"      — v2: sentence-level within landmark turns
+    # "topk"          — v3: proportional top-K turn retrieval
+    # "topk-sentence" — v4: top-K across all units including landmark sentences
     compression_strategy: str = "turn"
 
     # Query classification
-    query_classifier: str = "rules"     # "rules" | "llm"
+    query_classifier: str = "rules"
 
     # Scoring weights per query type
     lambda_decay: float = 0.05
@@ -60,21 +58,38 @@ class OptimizerConfig:
         "preference": {"keyword": 0.2, "semantic": 0.3, "recency": 0.5},
     })
 
-    # Turn-level compression thresholds (v1 strategy).
+    # v1 turn-level thresholds
     thresholds: dict = field(default_factory=lambda: {
         "factual":    {"high": 0.72, "low": 0.45},
         "analytical": {"high": 0.65, "low": 0.40},
         "preference": {"high": 0.60, "low": 0.35},
     })
 
-    # Sentence-level compression thresholds (v2 strategy).
-    # Tighter than turn-level because individual sentences have less context,
-    # making semantic similarity scores noisier — we need a higher bar to
-    # avoid keeping weak-signal filler sentences.
+    # v2 sentence-level thresholds (tighter — sentences have less context)
     sentence_thresholds: dict = field(default_factory=lambda: {
         "factual":    {"high": 0.80, "low": 0.60},
         "analytical": {"high": 0.75, "low": 0.55},
         "preference": {"high": 0.70, "low": 0.50},
+    })
+
+    # v3 top-K fraction — proportion of non-landmark TURNS to keep
+    topk_fraction: dict = field(default_factory=lambda: {
+        "factual":    0.20,
+        "analytical": 0.35,
+        "preference": 0.25,
+    })
+    topk_min_score: float = 0.30
+
+    # v4 top-K sentence fraction — proportion of ALL units (landmark sentences
+    # + non-landmark turns) to keep. Higher than v3 because sentence splitting
+    # increases the unit count and landmarks compete rather than hard-KEEP.
+    # Factual: keep ~40% of units — flight comparison content tends to score
+    # highly against flight queries, so top 40% captures it cleanly.
+    # Analytical: keep more — reasoning requires broader context.
+    topk_sentence_fraction: dict = field(default_factory=lambda: {
+        "factual":    0.40,
+        "analytical": 0.60,
+        "preference": 0.50,
     })
 
     # Model names

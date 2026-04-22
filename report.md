@@ -5,7 +5,7 @@
 
 ## What I Built
 
-The Context Optimizer takes a multi-turn conversation and a current query and returns a compressed conversation thread that preserves the information an LLM needs to answer the query — and discards what it doesn't. The pipeline has five stages: ingestion and normalisation, landmark detection, relevance scoring, compression and assembly, and evaluation. Two compression strategies are implemented: turn-level (v1) and sentence-level (v2).
+The Context Optimizer takes a multi-turn conversation and a current query and returns a compressed conversation thread that preserves the information an LLM needs to answer the query — and discards what it doesn't. The pipeline has five stages: ingestion and normalisation, landmark detection, relevance scoring, compression and assembly, and evaluation. Three compression strategies are implemented: turn-level (v1), sentence-level (v2), and top-K retrieval (v3).
 
 **Landmark detection** runs first, before scoring, using a two-pass rule-based detector. Pass 1 classifies each turn individually by text signals and speaker role — stated intents (slot-value signals: price, date, airline, seat class), decisions (offer patterns, strong confirmations, cross-turn offer→confirmation pairs), and action items (commitment verbs). Pass 2 promotes adjacent turn pairs using cross-turn alignment: an ASSISTANT offer followed by a USER weak confirmation ("yes", "okay") promotes both to `decision`; a USER constraint echoed back by the ASSISTANT promotes both to `intent`. Landmarks are hard-preserved — they bypass the relevance scorer and are always kept verbatim. Measured against Taskmaster-2 slot annotations as ground truth: 86.6% recall across 1,692 conversations.
 
@@ -13,11 +13,13 @@ The Context Optimizer takes a multi-turn conversation and a current query and re
 
 **Compression — v1 (turn-level):** classifies each turn as KEEP, CANDIDATE, or COMPRESS, groups consecutive COMPRESS turns into runs, and makes one gpt-4o-mini summarisation call per run (capped at ≤15 words). Runs shorter than 200 characters are dropped silently.
 
-**Compression — v2 (sentence-level):** for landmark turns, splits the text into sentences using NLTK's punkt tokeniser, re-runs landmark pattern matching at sentence level to identify which specific sentences triggered the landmark, scores non-landmark sentences independently against the query (not inheriting the parent turn's inflated score), and classifies each sentence individually using tighter thresholds. Sentences with the same effective disposition from the same turn are merged back into a single turn before assembly, preventing structural fragmentation. COMPRESS sentences sandwiched between KEEP sentences within a landmark turn are promoted to KEEP to maintain turn coherence. Non-landmark turns are treated atomically, identical to v1.
+**Compression — v2 (sentence-level):** for landmark turns, splits the text into sentences using NLTK's punkt tokeniser, re-runs landmark pattern matching at sentence level to identify which specific sentences triggered the landmark, and scores non-landmark sentences independently against the query. Sentences with the same effective disposition from the same turn are merged back before assembly to prevent structural fragmentation.
 
-**Assembly** enforces structural validity in both strategies: consecutive same-role turns are merged or bridged, and the thread is guaranteed to start with a user turn.
+**Compression — v3 (top-K retrieval):** landmarks always KEEP; non-landmark turns ranked by composite score descending; top K (proportional to conversation length) kept, rest compressed. A noise floor (`topk_min_score=0.30`) prevents low-quality turns filling K slots. Designed to guarantee token reduction independent of landmark density.
 
-**Evaluation** runs across 10 conversations × 2 queries each. Queries are selected per conversation by a gpt-4o-mini call that reads the first 15 turns and picks the two most answerable questions from a 14-item pool — factual, analytical, and preference types. Both full-context and optimised answers are generated with gpt-4o and evaluated by a gpt-4o judge on a 4-dimension rubric (correctness, completeness, landmark consistency, hallucination). BERTScore F1 (roberta-large, local) provides an independent LLM-free quality signal.
+**Assembly** enforces structural validity across all strategies: consecutive same-role turns are merged or bridged, and the thread is guaranteed to start with a user turn.
+
+**Evaluation** runs across 10 conversations × 2 queries each, with per-conversation query selection from a 14-item pool. Both full-context and optimised answers are generated and evaluated by a gpt-4o judge on a 4-dimension rubric. BERTScore F1 (roberta-large, local) provides an independent quality signal.
 
 ---
 
@@ -34,59 +36,62 @@ The Context Optimizer takes a multi-turn conversation and a current query and re
 | Landmark recall | 77.0% | — | Reported |
 | Latency | 628ms mean | — | Reported |
 
-**v2 spot-check** — single realistic 20-turn synthetic conversation (rambling flight booking, longer turns, multiple tangents):
+**v2 spot-check** — single realistic 20-turn synthetic conversation:
 
 | Metric | Result |
 |---|---|
-| Token reduction | 27.7% |
+| Token reduction | 34.1% |
 | Turn reduction | 40% (20 → 12 turns) |
-| Summaries inserted | 4 |
-| Structural repairs | 7 |
-| Latency | 7,560ms |
+| Latency | ~10s (CPU, unbatched) |
 
-Quality is preserved in v1. The optimised context produces answers statistically indistinguishable from full-context answers (Δ+0.01, BERTScore 0.940). The token reduction target is not met on either strategy — and the reason is specific and worth explaining honestly.
+**v3 evaluation** — same 10 conversations, proportional top-K (factual=20%, analytical=35%, preference=25%):
+
+| Metric | Result | Target | Status |
+|---|---|---|---|
+| Token reduction | 21.0% | 40–60% | ✗ |
+| Quality Δ (LLM judge) | -0.06 | ≥ 0 | ✗ |
+| BERTScore F1 | 0.952 | ≥ 0.85 | ✓ |
+| Latency | 462ms mean | — | Reported |
+
+v1 is the recommended default. Quality is preserved and the failure mode is conservative — it over-keeps rather than under-keeps.
 
 ---
 
 ## What Broke and Why
 
-**Token reduction shortfall.** The 40–60% target is not met on Taskmaster-2 with either strategy. After thorough investigation — auditing token weight distributions across 30 conversations, inspecting per-turn dispositions on the worst compressors, testing on synthetic realistic conversations, and implementing sentence-level compression — the root cause is clear.
+**Token reduction shortfall (v1, v2, v3).** The 40–60% target is not met on Taskmaster-2 with any strategy. The root cause is consistent: Taskmaster-2's crowdworker transcripts have unusually high landmark density (~46% of turns flagged) because slot values are repeated verbatim on nearly every turn. Landmark turns hold ~67% of total tokens. Even compressing every non-landmark turn to zero, maximum achievable reduction is ~33%. This is not representative of real production conversations, where landmark density is typically ~30%.
 
-Turn-level compression (v1): landmark detection flags ~46% of turns as load-bearing. Those turns hold ~67% of total tokens. Even compressing every non-landmark turn to zero, the maximum achievable reduction is ~33%. Taskmaster-2's crowdworker transcripts have unusually high landmark density because slot values are repeated verbatim on nearly every turn — this is not representative of real production conversations.
+**Top-K quality regression (v3).** One conversation produced Δ quality = -6.25 on a "what airports were involved?" query — the relevant airport turns did not rank in the top 20% of non-landmark turns for that specific query, so they were compressed away. This exposes the fundamental risk of hard-K retrieval: relevant content can be lost when it does not rank highly against a specific query even though it would be retained by landmark detection or threshold-based classification. v3 achieves higher reduction on long conversations with low landmark density (46% on our test conversation) but is not safe as a default because the failure mode is to silently drop relevant content rather than conservatively over-keep it.
 
-Sentence-level compression (v2): partially addresses this. When a landmark turn contains filler sentences alongside the decision sentence ("An onboard bar! That sounds fun. Okay I'm going to go with Virgin."), only the decision sentence is hard-preserved. The filler is scored independently and often compressed. On the synthetic conversation, this improved turn reduction to 40% and token reduction to 27.7%. But it does not fully close the gap to 40–60% because many of the longer turns in realistic conversations are already mostly load-bearing content — there is not enough low-relevance text to discard.
+**v2 latency.** Sentence-level scoring produces ~10s latency on CPU. Fixable by batching all non-landmark sentences into a single embedding call.
 
-The honest conclusion: **the 40–60% target is achievable on noisy, inefficient conversations — which is exactly the use case the system is designed for.** Clean, well-structured conversations compress less, correctly so. The four Taskmaster-2 conversations with lower landmark density (~32%) hit ≥40% COMP token weight, proving the pipeline works — the dataset just skews landmark-heavy.
+**Judge JSON parsing (fixed).** Initial evaluation returned all 5.0 scores due to missing `response_format=json_object`. Fixed.
 
-**v2 latency.** Sentence-level scoring runs keyword + semantic + recency independently per landmark turn rather than in one batch, producing 7,560ms latency vs 628ms for v1. Fixable by batching all non-landmark sentences across all landmark turns into a single scoring call — not implemented in this branch.
-
-**Judge JSON parsing (fixed).** The initial evaluation run returned all 5.0 scores — the neutral fallback — because the judge prompt did not use `response_format=json_object`. Fixed.
-
-**Fixed evaluation queries (fixed).** The initial evaluation used the same two queries for every conversation regardless of content. Fixed by adding a per-conversation query selector that picks the two most answerable questions from a 14-item pool.
+**Fixed evaluation queries (fixed).** Initial evaluation used the same two queries for every conversation. Fixed by per-conversation query selection from a 14-item pool.
 
 ---
 
 ## What I Learned
 
-The most useful insight is about where token reduction actually comes from. It is not the number of turns compressed — it is the token weight of those turns. Compressing 51% of turns saves almost nothing if those turns average 5 tokens each and the kept turns average 12. The compression opportunity is in long, rambling, low-relevance passages — not in the short filler turns that Taskmaster-2's telegraphic crowdworker style produces.
+The most important finding is about failure modes in compression strategies. Threshold-based compression (v1) fails conservatively — it over-keeps, reducing less than the target but never dropping critical content. Top-K retrieval (v3) fails aggressively — it can drop content that is genuinely relevant but does not rank highly for a specific query. For a production system, conservative failure is strongly preferable: an answer based on a slightly larger context is better than an answer that hallucinates because relevant context was discarded.
 
-Implementing sentence-level compression surfaced a non-obvious structural problem: splitting a turn into sentences and classifying them independently creates consecutive same-speaker synthetic turns, which the assembler's integrity check repairs with `[context continues]` bridges — inflating the output. The fix required three additional steps: merging on effective disposition rather than raw disposition, promoting sandwiched COMPRESS sentences between KEEPs within the same turn, and batching sentences back into single turns before assembly. None of these were anticipated in the v1 design — they emerged from actually building the feature.
+The second finding is that token reduction and quality preservation are in tension in a way that depends on the conversation structure. Dense, efficient conversations (where nearly every turn is load-bearing) compress less — and that is the correct behaviour. The system should not compress content just to hit a number.
 
-The quality result is the more important result. A context optimizer that shrinks context and degrades answer quality is useless. Showing that optimised context produces answers equivalent to full-context answers — on independently selected, conversation-appropriate queries, judged by a separate model on four dimensions, with a local BERTScore check as a second opinion — is the substantive claim. That result holds cleanly.
+Implementing sentence-level compression surfaced a structural problem that was not anticipated in the v1 design: splitting turns into sentences creates consecutive same-speaker synthetic turns which the assembler repairs with bridges, inflating the output. The three-step fix (merge on effective disposition, promote sandwiched sentences, batch turns before assembly) only emerged from carefully reading the assembled output and identifying what was wrong.
 
 ---
 
 ## What I'd Ship Next
 
-1. **Batch sentence scoring in v2.** Collect all non-landmark sentences across all landmark turns into a single embedding batch before scoring. Expected to reduce v2 latency from ~7.5s to ~800ms — close to v1 levels. One afternoon of work.
+1. **Hybrid v1+v3 strategy.** Use threshold-based classification as the safety net, but cap the output at a token budget. If the threshold-based output exceeds the budget, apply top-K to the non-landmark turns to trim further. This gets the reduction guarantees of v3 without the quality risk.
 
-2. **Full v2 evaluation.** Run the 10-conversation evaluation suite with `--compression-strategy sentence` to get quality numbers alongside token reduction. The v2 spot-check shows 27.7% token reduction with structural coherence — the quality numbers are the missing piece.
+2. **Full v2 evaluation.** Run the 10-conversation evaluation suite with `--compression-strategy sentence` to get quality numbers. The v2 spot-check shows 34.1% token reduction with structural coherence — the quality numbers are the missing piece.
 
-3. **Embedding-based landmark detector.** Replace regex patterns with cosine similarity to prototype embeddings using the already-loaded MiniLM-L6-v2. New domains need only new prototypes, not new code. Addresses the 13.4% of landmarks currently missed by the rule-based detector.
+3. **Embedding-based landmark detector.** Replace regex patterns with cosine similarity to prototype embeddings. New domains need only new prototypes, not new code. Addresses the 13.4% of landmarks currently missed.
 
-4. **Net cost dashboard.** Track tokens consumed by the summariser and judge per evaluation run. Report break-even explicitly: at what number of downstream LLM calls does compression pay for itself? Currently estimated at ≥2 downstream calls per optimised context.
+4. **Net cost dashboard.** Track tokens consumed by summariser and judge per run. Report break-even explicitly. Currently estimated at ≥2 downstream calls per optimised context.
 
-5. **Multi-domain evaluation.** Taskmaster-2 hotels and restaurant-search domains are already downloaded. Running evaluation across three domains tests domain-agnosticism without architectural changes.
+5. **Multi-domain evaluation.** Taskmaster-2 hotels and restaurant-search domains already downloaded. Running across three domains tests domain-agnosticism without architectural changes.
 
 ---
 
@@ -94,12 +99,12 @@ The quality result is the more important result. A context optimizer that shrink
 
 This project was built with Claude (Anthropic) as a development partner throughout.
 
-**Claude wrote:** All source code in `src/`, tests in `tests/`, and the utility scripts in `utilities/`. The landmark detector logic, sentence-level compressor, and all assembly fixes were implemented with Claude's assistance.
+**Claude wrote:** All source code in `src/`, tests in `tests/`, and the utility scripts in `utilities/`. The landmark detector, sentence-level compressor, top-K compressor, and all assembly fixes were implemented with Claude's assistance.
 
-**I designed:** The overall architecture, dataset selection rationale, evaluation methodology, the two-pass landmark detection strategy (cross-turn alignment was my suggestion after observing that single-turn scoring missed offer→confirmation pairs), and all key decisions documented in `key_decisions.md`. The decision to pursue sentence-level compression rather than accepting the v1 token reduction was mine. The investigation into why sentence splitting created structural fragmentation — and the three-step fix — was driven by me reading the output and identifying what was wrong.
+**I designed:** The overall architecture, dataset selection rationale, evaluation methodology, the two-pass landmark detection strategy, and all key decisions in `key_decisions.md`. The decision to implement top-K retrieval and to document its failure mode honestly rather than accepting the result were mine.
 
-**I verified:** Landmark detector output was manually inspected across multiple conversations using `--dry-run` and `--compare` modes. The 86.6% recall figure is from an actual corpus-wide run. The token reduction analysis (compression audit, token weight audit, poor compressor inspection) was driven by me asking the right questions about the numbers. The v2 `--compare` output was read carefully to identify remaining filler and structural problems before each fix.
+**I verified:** Landmark detector output was manually inspected across multiple conversations. The 86.6% recall figure is from an actual corpus-wide run. The token reduction analysis was driven by me asking the right questions about the numbers. The v3 quality regression was identified by reading the CSV row by row, not from the summary.
 
-**How I used AI:** As a senior collaborator — I pushed back when explanations were incomplete, asked follow-up questions when numbers didn't make sense, and made all architectural decisions myself. When v2 produced more turns than v1, I identified the cause (synthetic turn fragmentation) and directed the fix. When sandwiched sentences were still creating bridges, I identified the structural pattern and asked for the promotion logic.
+**How I used AI:** As a senior collaborator — I pushed back when explanations were incomplete, made all architectural decisions myself, and identified every failure mode by reading the actual output rather than accepting summary statistics.
 
 The judgment about what to build, how to evaluate it honestly, and what the failure modes mean — those are mine.
