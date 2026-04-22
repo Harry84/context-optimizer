@@ -1,0 +1,30 @@
+def _classify_units_topk(
+    units: list[Unit],
+    query_type: str,
+    config: OptimizerConfig,
+) -> list[Unit]:
+    """
+    Classify ALL units using top-K with noise floor.
+
+    Uses topk_sentence_fraction (separate from topk_fraction used by v3)
+    because sentence splitting increases unit count and landmarks compete
+    rather than being hard-KEEPed — so a higher fraction is needed to
+    capture all relevant content.
+    """
+    fraction  = config.topk_sentence_fraction[query_type]
+    min_score = config.topk_min_score
+
+    candidates = [u for u in units if u.score >= min_score]
+    noise      = [u for u in units if u.score <  min_score]
+
+    for u in noise:
+        u.disposition = "COMPRESS"
+
+    k = max(1, math.ceil(fraction * len(units)))
+    ranked   = sorted(candidates, key=lambda u: u.score, reverse=True)
+    keep_ids = {id(u) for u in ranked[:k]}
+
+    for u in candidates:
+        u.disposition = "KEEP" if id(u) in keep_ids else "COMPRESS"
+
+    return units
