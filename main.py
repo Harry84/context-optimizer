@@ -6,12 +6,9 @@ Usage:
     python main.py inspect --conv-id dlg-xxx --query "..." --query-pos 50
     python main.py inspect --conv-id dlg-xxx --query "..." --query-pos 50 --dry-run
     python main.py inspect --conv-id dlg-xxx --query "..." --query-pos 50 --compare
-    python main.py --compression-strategy sentence inspect --conv-id dlg-xxx --query "..." --query-pos 50
-    python main.py --compression-strategy topk inspect --conv-id dlg-xxx --query "..." --query-pos 50
-    python main.py --compression-strategy topk-sentence inspect --conv-id dlg-xxx --query "..." --query-pos 50
+    python main.py --compression-strategy chunk inspect --conv-id dlg-xxx --query "..." --query-pos 50
     python main.py evaluate
-    python main.py --compression-strategy topk evaluate
-    python main.py --compression-strategy topk-sentence evaluate
+    python main.py --compression-strategy chunk evaluate
 """
 
 from __future__ import annotations
@@ -143,6 +140,7 @@ def cmd_inspect(
                 for t in run_turns:
                     lm = " [LM]" if t.is_landmark else ""
                     print(f"  [{disposition:>8}] [{t.speaker[:4]}] (score={t.score:.2f}){lm} {t.text[:75]}")
+
         elif config.compression_strategy in ("topk", "topk-sentence"):
             if config.compression_strategy == "topk":
                 from src.compression.topk_compressor import classify_turns_topk
@@ -150,12 +148,10 @@ def cmd_inspect(
                 runs       = group_into_runs(classified)
                 non_lm     = sum(1 for t in classified if not t.is_landmark)
             else:
-                # topk-sentence: show as turn dispositions for simplicity
                 from src.compression.topk_sentence_compressor import topk_sentence_runs
                 runs       = topk_sentence_runs(scored, query, query_pos, query_type, config)
-                classified = scored  # use scored turns for landmark count
+                classified = scored
                 non_lm     = sum(1 for t in scored if not t.is_landmark)
-
             keep           = sum(len(ts) for d, ts in runs if d == "KEEP")
             compress_count = sum(len(ts) for d, ts in runs if d == "COMPRESS")
             compress_runs  = sum(1 for d, _ in runs if d == "COMPRESS")
@@ -171,6 +167,30 @@ def cmd_inspect(
                 for t in run_turns:
                     lm = " [LM]" if t.is_landmark else ""
                     print(f"  [{disposition:>8}] [{t.speaker[:4]}] (score={t.score:.2f}){lm} {t.text[:75]}")
+
+        elif config.compression_strategy == "chunk":
+            from src.compression.chunk_compressor import (
+                _score_turns_by_chunks, classify_turns_chunk_topk
+            )
+            _score_turns_by_chunks(scored, query, query_pos, config)
+            classified     = classify_turns_chunk_topk(scored, query_type, config)
+            runs           = group_into_runs(classified)
+            keep           = sum(1 for t in classified if t.disposition in ("KEEP", "CANDIDATE"))
+            compress_count = sum(1 for t in classified if t.disposition == "COMPRESS")
+            compress_runs  = sum(1 for d, _ in runs if d == "COMPRESS")
+            landmarks      = sum(1 for t in history if t.is_landmark)
+            k              = max(1, math.ceil(config.chunk_topk_fraction[query_type] * len(history)))
+            fraction       = config.chunk_topk_fraction[query_type]
+            print(f"Landmarks detected: {landmarks}  |  chunk_size={config.chunk_size}  stride={config.chunk_stride}")
+            print(f"fraction={fraction:.0%}  K={k}/{len(history)} turns kept")
+            print(f"Turns to KEEP:      {keep}")
+            print(f"Turns to COMPRESS:  {compress_count} ({compress_runs} runs → {compress_runs} LLM calls)")
+            print(f"Est. token reduction: ~{100*compress_count/len(history):.0f}%")
+            print("\n--- PER-TURN DISPOSITIONS ---")
+            for turn in classified:
+                lm = f" [{turn.landmark_type.upper()}]" if turn.is_landmark else ""
+                print(f"  [{turn.disposition:>8}] [{turn.speaker[:4]}] (score={turn.score:.2f}){lm} {turn.text[:80]}")
+
         else:
             classified     = classify_turns(scored, query_type, config)
             runs           = group_into_runs(classified)
@@ -247,8 +267,8 @@ def main() -> None:
     parser.add_argument("--summariser",  default="gpt-4o-mini")
     parser.add_argument("--judge",       default="gpt-4o")
     parser.add_argument("--compression-strategy", default="turn",
-                        choices=["turn", "sentence", "topk", "topk-sentence"],
-                        help="turn=v1, sentence=v2, topk=v3, topk-sentence=v4")
+                        choices=["turn", "sentence", "topk", "topk-sentence", "chunk"],
+                        help="turn=v1, sentence=v2, topk=v3, topk-sentence=v4, chunk=v5")
 
     args   = parser.parse_args()
     config = OptimizerConfig(
