@@ -1,7 +1,7 @@
 # Architecture Decisions Document
 ## Intelligent Context Optimizer for Multi-Turn Agents
 
-**Version:** 1.3
+**Version:** 1.4
 **Date:** April 2026
 **Status:** Implemented
 
@@ -13,20 +13,109 @@ The Context Optimizer takes a multi-turn conversation and a current query, and r
 
 ```
 Input:  Conversation (N turns) + Query string (at position Q in the conversation)
-Output: Optimised [{role, content}] thread covering turns 0..Q-1 (40–60% fewer tokens)
+Output: Optimised [{role, content}] thread covering turns 0..Q-1 (24–34% fewer tokens)
 ```
 
 **Critical constraint:** Only turns *before* the current query position are considered. Turn Q itself is the query being answered — it is not part of the context window. This mirrors real agent behaviour.
-
-```
-Ingestion → Landmark Detection → Relevance Scoring → Compression & Assembly → Evaluation
-```
 
 Each stage has a clean interface. Components are swappable without touching adjacent stages.
 
 ---
 
-## 2. Project Structure
+## 2. Pipeline Diagram
+
+```mermaid
+flowchart TD
+    subgraph INPUT["Input"]
+        A["Conversation\n(N turns)"]
+        B["Query + Position Q"]
+    end
+
+    subgraph S1["Stage 1 — Ingestion"]
+        C["Load Taskmaster-2 JSON\nFilter ≥ min_turns\nDedup sentences\nNormalise to Turn objects"]
+    end
+
+    subgraph S2["Stage 2 — Landmark Detection\n(zero API cost, < 5ms)"]
+        D["Pass 1: Per-turn pattern matching\n· Slot-value signals → intent\n· Offer patterns → decision\n· Strong confirmations → decision\n· Conversation-close → decision\n· Action verbs → action_item\n· Pure filler → not landmark"]
+        E["Pass 2: Cross-turn alignment\n· Offer→Confirmation → both decision\n· Constraint→Echo → both intent"]
+        D --> E
+    end
+
+    subgraph S3["Stage 3 — Relevance Scoring"]
+        F["Classify query\nfactual / analytical / preference"]
+        G["Score turns 0..Q-1 only\nKeyword: TF-IDF cosine\nSemantic: MiniLM-L6-v2 cosine\nRecency: exp decay\nLandmark boost: +0.3"]
+        F --> G
+    end
+
+    subgraph S4["Stage 4 — Compression & Assembly"]
+        H{{"Compression\nstrategy?"}}
+
+        subgraph V1["v1 — Turn-Level"]
+            I["Classify each turn\nKEEP / CANDIDATE / COMPRESS\n(landmark → always KEEP)"]
+            J["Group into runs\nmerge singleton COMPRESS runs"]
+            I --> J
+        end
+
+        subgraph V2["v2 — Sentence-Level"]
+            K["Split landmark turns\ninto sentences (NLTK punkt)"]
+            L["Re-run landmark patterns\nper sentence"]
+            M["Score all non-landmark\nsentences in one batch"]
+            N["Classify sentences\n(tighter thresholds)"]
+            O["Promote sandwiched\nCOMPRESS → CANDIDATE"]
+            P["Merge same-turn\nsame-disposition sentences"]
+            K --> L --> M --> N --> O --> P
+        end
+
+        H -->|turn| V1
+        H -->|sentence| V2
+
+        Q["Summarise COMPRESS runs\ngpt-4o-mini · ≤15 words\nDrop runs < 200 chars"]
+        R["Assemble thread\nSmart merge consecutive ASSISTANT\nBridge consecutive USER\nGuarantee valid role alternation"]
+
+        V1 --> Q
+        V2 --> Q
+        Q --> R
+    end
+
+    subgraph S5["Stage 5 — Evaluation"]
+        S["Select queries\ngpt-4o-mini picks 2 from\n14-item pool per conversation"]
+        T["Generate answers\nFull context vs Optimised\ngpt-4o · temperature=0"]
+        U["LLM-as-Judge\nCorrectness · Completeness\nLandmark consistency · Hallucination\ngpt-4o · temperature=0"]
+        V["BERTScore F1\nroberta-large · local\nthreshold ≥ 0.85"]
+        W["Report\nToken reduction %\nΔ Quality · BERTScore\nLandmark recall · Latency"]
+        S --> T --> U --> W
+        T --> V --> W
+    end
+
+    subgraph OUTPUT["Output"]
+        X["Optimised thread\n[{role, content}]\nvalid for LLM consumption"]
+        Y["eval_results.csv\nAcceptance bars"]
+    end
+
+    A --> S1
+    B --> S1
+    S1 --> S2
+    S2 --> S3
+    B --> S3
+    S3 --> S4
+    S4 --> S5
+    R --> X
+    S5 --> Y
+
+    style INPUT fill:#1e293b,stroke:#475569,color:#f1f5f9
+    style OUTPUT fill:#1e293b,stroke:#475569,color:#f1f5f9
+    style S1 fill:#0f172a,stroke:#334155,color:#94a3b8
+    style S2 fill:#0f172a,stroke:#334155,color:#94a3b8
+    style S3 fill:#0f172a,stroke:#334155,color:#94a3b8
+    style S4 fill:#0f172a,stroke:#334155,color:#94a3b8
+    style S5 fill:#0f172a,stroke:#334155,color:#94a3b8
+    style V1 fill:#172554,stroke:#1d4ed8,color:#bfdbfe
+    style V2 fill:#14532d,stroke:#16a34a,color:#bbf7d0
+```
+
+---
+
+## 3. Project Structure
 
 ```
 context_optimizer/
@@ -44,17 +133,19 @@ context_optimizer/
 │   │   ├── detector.py               # Pluggable detector interface + factory
 │   │   └── rule_detector.py          # v1: rule-based + two-pass alignment
 │   ├── compression/
-│   │   ├── compressor.py             # Classify dispositions, group into runs
+│   │   ├── compressor.py             # v1 turn-level: classify + group into runs
+│   │   ├── sentence_compressor.py    # v2 sentence-level: split, score, classify, merge
+│   │   ├── sentence_splitter.py      # NLTK punkt sentence boundary detection
 │   │   ├── summariser.py             # LLM summarisation (one call per run)
 │   │   ├── assembler.py              # Assemble thread, smart merge, integrity check
-│   │   └── pipeline.py               # compress() entry point
+│   │   └── pipeline.py               # compress() entry point — selects v1 or v2
 │   └── evaluation/
-│       ├── harness.py                # Full evaluation loop, acceptance bars
+│       ├── harness.py                # Full evaluation loop, query selection, acceptance bars
 │       ├── judge.py                  # LLM-as-judge, 4-dimension rubric
 │       ├── bertscore_metric.py       # BERTScore F1 (local)
 │       └── landmark_recall.py        # Recall vs. slot annotation GT
-├── utilities/                        # Inspection and download scripts
-├── tests/                            # pytest suite (no LLM calls)
+├── utilities/                        # Inspection and audit scripts
+├── tests/                            # pytest suite (73 tests, no LLM calls)
 ├── main.py                           # CLI: stats, inspect, evaluate
 ├── .env                              # API keys (gitignored)
 └── .env.example                      # Template (committed)
@@ -62,7 +153,7 @@ context_optimizer/
 
 ---
 
-## 3. Core Data Model
+## 4. Core Data Model
 
 ```python
 @dataclass
@@ -82,7 +173,7 @@ class Turn:
 
 ---
 
-## 4. Stage 1 — Ingestion & Normalisation
+## 5. Stage 1 — Ingestion & Normalisation
 
 **Module:** `src/ingestion/loader.py`
 
@@ -96,13 +187,13 @@ Load Taskmaster-2 JSON, filter by turn count, apply data-quality fixes, normalis
 
 ---
 
-## 5. Stage 2 — Landmark Detection
+## 6. Stage 2 — Landmark Detection
 
 **Module:** `src/landmarks/`
 
 Classifies each turn as landmark or not before relevance scoring, so landmark boost can be applied in scoring.
 
-### 5.1 Detector Interface (pluggable)
+### 6.1 Detector Interface (pluggable)
 
 ```python
 class LandmarkDetector(Protocol):
@@ -111,7 +202,7 @@ class LandmarkDetector(Protocol):
 
 Active detector selected via `OptimizerConfig.landmark_detector` ("rules" | "embedding" | "llm").
 
-### 5.2 v1 — Rule-Based + Two-Pass Alignment
+### 6.2 v1 — Rule-Based + Two-Pass Alignment
 
 **Pass 1 — individual turn scoring:**
 
@@ -126,32 +217,29 @@ Active detector selected via `OptimizerConfig.landmark_detector` ("rules" | "emb
 | ASSISTANT: action commitment ("I'll send", "tickets confirmed") | `action_item` |
 | Short pure filler ("okay", "sure", "hold on") | Not a landmark |
 
-**Conversation-close signals (added after manual inspection):**
-Turns like "Okay. That will be all." and "Oh, I'm done." contain no slot signals but are load-bearing — they tell the LLM the user's goal was met or abandoned and the conversation is resolved. They are classified as `decision` landmarks and always kept verbatim. Signals include explicit completions, farewell phrases, gratitude closings, and casual wrap-ups ("sounds good", "I'm all set").
-
 **Pass 2 — cross-turn alignment:**
 - Pattern A (Offer→Confirmation): ASSISTANT[i] offer + USER[i+1] weak confirmation ("yes", "okay") → both `decision`
 - Pattern B (Constraint→Echo): USER[i] slot signal + ASSISTANT[i+1] echo ("so you want X, correct?") → both `intent`
 
 **Measured: 86.6% GT recall, 46.4% landmark rate, 53.6% compressible.**
 
-### 5.3 v2 / LLM modes
+### 6.3 v2 / LLM modes
 
 Documented as upgrade paths in `key_decisions.md KD-011`. Not implemented in v1.
 
 ---
 
-## 6. Stage 3 — Relevance Scoring
+## 7. Stage 3 — Relevance Scoring
 
 **Module:** `src/scoring/scorer.py`
 
 Operates only on turns `0..Q-1` where Q is the query position. Future turns are never seen.
 
-### 6.1 Query Classification
+### 7.1 Query Classification
 
 Rule-based classifier assigns "factual", "analytical", or "preference" — drives weight selection.
 
-### 6.2 Composite Score
+### 7.2 Composite Score
 
 ```
 S(t, q) = w1·keyword(t,q) + w2·semantic(t,q) + w3·recency(t,Q) + landmark_boost(t)
@@ -174,9 +262,9 @@ All components normalised to [0,1] before combining.
 
 ---
 
-## 7. Stage 4 — Compression & Assembly
+## 8. Stage 4 — Compression & Assembly
 
-### 7.1 Turn Classification (`compressor.py`)
+### 8.1 v1 — Turn-Level (`compressor.py`)
 
 ```
 is_landmark → KEEP (hard rule)
@@ -185,77 +273,76 @@ score ≥ low  → CANDIDATE (kept verbatim; treated as KEEP for grouping)
 score < low  → COMPRESS
 ```
 
-Thresholds: factual (0.6/0.3), analytical (0.5/0.25), preference (0.45/0.2).
+Thresholds: factual (0.72/0.45), analytical (0.65/0.40), preference (0.60/0.35).
 
-### 7.2 Run Grouping
+Contiguous same-disposition turns grouped into runs. Single-turn COMPRESS runs merged into adjacent COMPRESS runs to reduce LLM call count.
 
-Contiguous same-disposition turns grouped into runs. Single-turn COMPRESS runs merged into adjacent COMPRESS runs where possible to reduce LLM call count.
+### 8.2 v2 — Sentence-Level (`sentence_compressor.py`)
 
-### 7.3 Summarisation (`summariser.py`)
+For landmark turns only:
+1. Split into sentences using NLTK punkt tokeniser
+2. Re-run landmark patterns at sentence level — only triggering sentences are hard-KEEPed
+3. Score all non-landmark sentences in one batch (keyword + semantic + recency)
+4. Classify using tighter `sentence_thresholds` (factual 0.80/0.60)
+5. Promote COMPRESS sentences sandwiched between KEEPs in the same turn → prevents structural fragmentation
+6. Merge consecutive same-disposition sentences from the same turn back into one
 
-One LLM call per COMPRESS run. Runs shorter than 80 characters total are **dropped silently** — no LLM call, no placeholder. This prevents summaries longer than the original content and eliminates cost for pure filler turns.
+Non-landmark turns are treated atomically (same as v1).
 
-Prompt instructs the model to: summarise in 1-2 sentences, preserve constraints/prices/options, omit greetings and filler, and return "SKIP" if nothing meaningful.
+Selected via `--compression-strategy turn|sentence`.
 
-### 7.4 Assembly (`assembler.py`)
+### 8.3 Summarisation (`summariser.py`)
 
-Builds final `[{role, content}]` thread:
-- KEEP/CANDIDATE runs → verbatim turns in order
-- COMPRESS runs → single `[SUMMARY: ...]` assistant turn (or nothing if summariser returned empty)
+One gpt-4o-mini call per COMPRESS run. Runs shorter than 200 characters dropped silently. Summary capped at ≤15 words / 30 tokens.
 
-**Smart merge** (`_smart_merge`): when consecutive ASSISTANT turns are merged (summary + verbatim, or two verbatim turns):
-- New content substring of existing → skip (already present)
-- Existing content substring of new → replace (new is a superset — handles crowdworker repeat-then-complete pattern)
-- 80%+ word overlap → skip (near-duplicate)
-- Otherwise → append
+### 8.4 Assembly (`assembler.py`)
 
-**Integrity check** repairs:
-- Consecutive ASSISTANT turns → smart merge
-- Consecutive USER turns → insert `[context continues]` assistant bridge (preserves USER turns as distinct)
-- Thread starting with ASSISTANT → prepend `[conversation start]` user turn
-
-### 7.5 Pipeline Entry Point (`pipeline.py`)
-
-`compress(conversation, query, query_position, config)` — main entry point.
-Runs all stages and returns `(thread, AssemblyStats, latency_ms)`.
+- KEEP/CANDIDATE runs → verbatim turns in chronological order
+- COMPRESS runs → single `[SUMMARY: ...]` assistant turn (or dropped if summariser returns empty)
+- Smart merge: consecutive ASSISTANT turns merged, substring/near-duplicate detection
+- Integrity check: consecutive USER turns bridged with `[context continues]`; thread always starts with user
 
 ---
 
-## 8. Stage 5 — Evaluation
+## 9. Stage 5 — Evaluation
 
 **Module:** `src/evaluation/harness.py`
 
-Runs full vs. optimised context for each (conversation, query) pair, collects all metrics, prints acceptance bar summary, saves `eval_results.csv`.
+### 9.1 Query Selection
 
-### 8.1 Metrics
+Per-conversation: gpt-4o-mini reads first 15 turns and selects the 2 most answerable queries from a 14-item pool (factual, analytical, preference types). Falls back to defaults on parse error.
+
+### 9.2 Metrics
 
 | Metric | Method | Target |
 |---|---|---|
 | Token reduction % | `(full - opt) / full` | 40–60% |
 | Quality Δ (LLM judge) | Mean of 4 dimensions, opt minus full | ≥ 0 |
 | BERTScore F1 | roberta-large, local | ≥ 0.85 |
-| Landmark recall | `\|detected ∩ GT\| / \|GT\|` | Reported |
+| Landmark recall | `|detected ∩ GT| / |GT|` | Reported |
 | Latency | Wall-clock ms for compress() | Reported |
 
-### 8.2 LLM-as-Judge
+### 9.3 LLM-as-Judge
 
-Each answer evaluated independently against its own context (not side-by-side). Temperature=0. 4 dimensions: correctness, completeness, landmark consistency, hallucination (10 = no hallucination).
-
----
-
-## 9. CLI
-
-```
-python main.py stats                         # corpus statistics
-python main.py inspect --conv-id X --query Y --query-pos N          # full compression
-python main.py inspect --conv-id X --query Y --query-pos N --dry-run # no API calls
-python main.py inspect --conv-id X --query Y --query-pos N --compare # side-by-side
-python main.py evaluate                      # full evaluation pipeline
-```
+Each answer evaluated independently against its own context. Temperature=0. `response_format=json_object` enforced to prevent parse failures. 4 dimensions: correctness, completeness, landmark consistency, hallucination (10 = none).
 
 ---
 
-## 10. Rejected Alternatives
+## 10. CLI
+
+```
+python main.py stats
+python main.py inspect --conv-id X --query Y --query-pos N
+python main.py inspect --conv-id X --query Y --query-pos N --dry-run
+python main.py inspect --conv-id X --query Y --query-pos N --compare
+python main.py --compression-strategy sentence inspect --conv-id X --query Y --query-pos N
+python main.py evaluate
+python main.py --compression-strategy sentence evaluate
+```
+
+---
+
+## 11. Rejected Alternatives
 
 - **RAG-style retrieval** — ignores turn order, cannot enforce landmark preservation for turns dissimilar to query
 - **Sliding window truncation** — drops critical early context (original intent)
@@ -265,7 +352,7 @@ python main.py evaluate                      # full evaluation pipeline
 
 ---
 
-## 11. What Breaks at Scale (500+ Turns)
+## 12. What Breaks at Scale (500+ Turns)
 
 | Failure Mode | Root Cause | Mitigation |
 |---|---|---|
@@ -274,10 +361,11 @@ python main.py evaluate                      # full evaluation pipeline
 | Landmark detection drift | Regex degrades on unusual phrasing | Upgrade to embedding detector (v2) |
 | Assembly integrity failures | More anomalies in long conversations | Smart merge + integrity check with logging |
 | Context window exceeded | Summarised thread still too long | Hard token cap; second summarisation pass |
+| v2 sentence scoring latency | Large sentence batch on CPU | GPU deployment or embedding cache reuse |
 
 ---
 
-## 12. Net Cost Analysis
+## 13. Net Cost Analysis
 
 ```
 Cost    = summarisation_runs × avg_tokens × cost/token
@@ -291,15 +379,17 @@ Break-even with LLM detection: ≥3–5 downstream calls.
 
 ---
 
-## 13. Dependencies
+## 14. Dependencies
 
 | Package | Purpose | Where |
 |---|---|---|
-| `sentence-transformers` | Semantic embeddings | Local (CPU) |
+| `sentence-transformers` | Semantic embeddings (MiniLM-L6-v2) | Local (CPU) |
 | `scikit-learn` | TF-IDF | Local |
 | `bert-score` | BERTScore F1 | Local |
 | `tiktoken` | Token counting | Local |
-| `openai` | Summarisation + judge | API |
+| `nltk` | Sentence boundary detection (punkt) | Local |
+| `langchain-text-splitters` | NLP utilities (planned embedding work) | Local |
+| `openai` | Summarisation + judge + query selection | API |
 | `python-dotenv` | `.env` loading with override | Local |
 | `pandas` | Evaluation results | Local |
 | `pytest` | Test runner | Local |
