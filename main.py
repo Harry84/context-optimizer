@@ -265,6 +265,7 @@ def main() -> None:
     parser.add_argument("--min-turns",   default=20, type=int)
     parser.add_argument("--detector",    default="rules", choices=["rules", "embedding", "llm"])
     parser.add_argument("--summariser",  default="gpt-4o-mini")
+    parser.add_argument("--generator",   default="gpt-4o-mini")
     parser.add_argument("--judge",       default="gpt-4o")
     parser.add_argument("--compression-strategy", default="turn",
                         choices=["turn", "sentence", "topk", "topk-sentence", "chunk"],
@@ -276,6 +277,7 @@ def main() -> None:
         min_turns=args.min_turns,
         landmark_detector=args.detector,
         summarisation_model=args.summariser,
+        generator_model=args.generator,
         judge_model=args.judge,
         compression_strategy=args.compression_strategy,
     )

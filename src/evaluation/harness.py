@@ -244,8 +244,8 @@ def _evaluate_one(conv: Conversation, eq: EvalQuery, config: OptimizerConfig) ->
 
     token_reduction = (full_tokens - opt_tokens) / full_tokens * 100 if full_tokens > 0 else 0.0
 
-    answer_full = _generate_answer(full_thread, eq.query_text, config.judge_model)
-    answer_opt  = _generate_answer(opt_thread,  eq.query_text, config.judge_model)
+    answer_full = _generate_answer(full_thread, eq.query_text, config.generator_model)
+    answer_opt  = _generate_answer(opt_thread,  eq.query_text, config.generator_model)
 
     scores_full, scores_opt = judge_pair(
         query=eq.query_text,

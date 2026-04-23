@@ -61,13 +61,15 @@ The Context Optimizer takes a multi-turn conversation and a current query and re
 
 | Metric | Result | Target | Status |
 |---|---|---|---|
-| Token reduction | 43.4% | 40–60% | ✓ |
-| Quality Δ (LLM judge) | -0.31 to -0.56* | ≥ 0 | ✗ |
-| BERTScore F1 | 0.935–0.947 | ≥ 0.85 | ✓ |
+| Token reduction | 43.7% | 40–60% | ✓ |
+| Quality Δ (LLM judge) | -0.21* | ≥ 0 | ✗ |
+| BERTScore F1 | 0.927 | ≥ 0.85 | ✓ |
 | BERTScore ≥ 0.85 | 100% of queries | — | ✓ |
-| Latency | 1,501ms mean | — | Reported |
+| Quality (full context) | 9.01 | — | |
+| Quality (optimised) | 8.80 | — | |
+| Latency | 1,674ms mean | — | Reported |
 
-*The LLM judge Δ quality figure is unstable across runs due to non-determinism in gpt-4o scoring even at temperature=0. The full-context quality score varied between 9.34 and 9.64 across runs while the optimised score remained stable at ~9.07. The Δ is therefore not a reliable signal for comparing runs. BERTScore, which is deterministic, is the stable quality indicator — at 0.935–0.947 with 100% of queries passing the 0.85 threshold.
+*Prior runs reported Δ of -0.31 to -0.56, but those used the same model (gpt-4o) for both answer generation and judging — a methodology error. These results use gpt-4o-mini for generation and gpt-4o for judging (separate models). The full-context quality score dropped from ~9.5 to 9.01 as a result — expected, since gpt-4o-mini produces weaker answers than gpt-4o. The Δ quality figure remains an unreliable signal due to gpt-4o judge non-determinism at temperature=0; BERTScore is the stable indicator — 0.927 with 100% of queries passing the 0.85 threshold.
 
 **v5 is the first strategy to hit the 40–60% token reduction target on the real Taskmaster-2 corpus.** v1 remains the recommended default for production use because its failure mode is conservative.
 

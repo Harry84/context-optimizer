@@ -70,7 +70,7 @@ Landmark detection and embedding scoring run locally — no API key needed for t
 pytest tests/ -v
 ```
 
-All 46 tests pass without any LLM API calls.
+All tests pass without any LLM API calls.
 
 ### 5. Inspect a conversation (dry run — no API calls)
 
@@ -103,11 +103,36 @@ python main.py stats
 ### 8. Run full evaluation
 
 ```bash
+# Default strategy (v1 — turn-level)
 python main.py evaluate
+
+# Per-strategy evals
+python main.py --compression-strategy chunk evaluate
+python main.py --compression-strategy sentence evaluate
+python main.py --compression-strategy topk evaluate
+python main.py --compression-strategy topk-sentence evaluate
 ```
 
-Runs on 10 sampled conversations × 2 queries each (~$1–2 OpenAI cost).
-Outputs `eval_results.csv` and prints acceptance bar summary.
+Runs on 10 sampled conversations × 2 queries each (~$1–2 OpenAI cost per run).
+Outputs `eval_results.csv` (or `eval_results_<strategy>.csv`) and prints acceptance bar summary.
+
+Answer generation uses `--generator` (default `gpt-4o-mini`); judging uses `--judge` (default `gpt-4o`).
+
+### 9. Inspect a synthetic conversation
+
+```bash
+python main.py \
+  --data-path "data/synthetic/synthetic_flights.json" \
+  --min-turns 5 \
+  --compression-strategy chunk \
+  inspect \
+  --conv-id syn-001-rambling-holiday \
+  --query "What flights were compared and what did the user decide?" \
+  --query-pos 20 \
+  --compare
+```
+
+Useful for validating compression behaviour on short, predictable conversations without touching the main corpus.
 
 ---
 
@@ -199,6 +224,28 @@ LLM-as-judge, 4 dimensions (1–10 each), temperature=0:
 | Hallucination | No ungrounded information introduced (10 = none) |
 
 Independent metric: **BERTScore F1** (roberta-large, local). Threshold ≥ 0.85.
+
+Answer generation uses `gpt-4o-mini`; judging uses `gpt-4o` (separate models to avoid self-grading bias).
+
+---
+
+## Evaluation results — v5 chunk (latest)
+
+10 conversations × 2 queries each, Taskmaster-2 flights corpus, `--compression-strategy chunk`.
+
+| Metric | Result | Target | Status |
+|---|---|---|---|
+| Token reduction | 43.7% | 40–60% | ✓ PASS |
+| Quality Δ (LLM judge) | -0.21 | ≥ 0 | ✗ FAIL |
+| BERTScore F1 | 0.927 | ≥ 0.85 | ✓ PASS |
+| BERTScore ≥ 0.85 | 100% of queries | — | ✓ |
+| Landmark recall | 77.0% | — | Reported |
+| Quality (full context) | 9.01 | — | |
+| Quality (optimised) | 8.80 | — | |
+| Compression | 64.2% turns | — | |
+| Latency | 1,674ms mean | — | |
+
+The Δ quality FAIL is consistent with earlier runs and is attributed to gpt-4o judge non-determinism even at temperature=0 (documented in [`report.md`](report.md)). BERTScore is the stable signal — 100% of queries pass the 0.85 threshold.
 
 ---
 
