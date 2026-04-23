@@ -52,7 +52,7 @@ Downloads `data/taskmaster2/flights.json` (~8MB). The `data/` directory is gitig
 
 ### 3. Set API keys
 
-Copy `.env.example` to `.env` and fill in your keys:
+Create a `.env` file in the project root with your keys:
 
 ```
 OPENAI_API_KEY=sk-proj-...

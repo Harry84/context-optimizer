@@ -168,8 +168,7 @@ context_optimizer/
 ├── utilities/                             # Inspection and audit scripts
 ├── tests/                                 # pytest suite (73 tests, no LLM calls)
 ├── main.py                                # CLI: stats, inspect, evaluate
-├── .env                                   # API keys (gitignored)
-└── .env.example                           # Template (committed)
+└── .env                                   # API keys (gitignored)
 ```
 
 ---
