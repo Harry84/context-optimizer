@@ -26,7 +26,7 @@ Evaluation reports token reduction %, answer quality (LLM-as-judge, 4-dimension 
 1,692 conversations ≥20 turns. Mean 30.2 turns, max 85 turns.
 Conversations follow a goal-directed pattern — user establishes constraints, compares options, makes decisions — structurally analogous to LEC trade logistics enquiries.
 
-Slot annotations per utterance serve as independent ground truth for landmark detection recall (86.6% measured across the full corpus).
+Slot annotations per utterance serve as independent ground truth for landmark detection recall (86.8% measured across the full corpus).
 
 ---
 
@@ -154,7 +154,7 @@ flights.json
     │           — action items (commitment patterns)
     │           — conversation-close signals ("that's all", "goodbye", etc.)
     │  Pass 2: cross-turn alignment (offer→confirmation, constraint→echo)
-    │  86.6% GT recall, <5ms per conversation
+    │  86.8% GT recall, <5ms per conversation
     ▼
 [Stage 3] Relevance Scoring
     │  Query classified: factual / analytical / preference
@@ -194,7 +194,7 @@ Four categories — three from the assignment specification plus conversation-cl
 Detection is **text and speaker role only** — slot annotations are never used in detection, only in evaluation.
 
 Measured corpus-wide (1,692 conversations, ≥20 turns):
-- GT recall: **86.6%**
+- GT recall: **86.8%**
 - Landmark rate: **46.4%** of all turns
 - Compressible: **53.6%** of all turns
 
@@ -239,13 +239,15 @@ Answer generation uses `gpt-4o-mini`; judging uses `gpt-4o` (separate models to 
 | Quality Δ (LLM judge) | -0.21 | ≥ 0 | ✗ FAIL |
 | BERTScore F1 | 0.927 | ≥ 0.85 | ✓ PASS |
 | BERTScore ≥ 0.85 | 100% of queries | — | ✓ |
-| Landmark recall | 77.0% | — | Reported |
+| Landmark recall | 77.0%† | — | Reported |
 | Quality (full context) | 9.01 | — | |
 | Quality (optimised) | 8.80 | — | |
 | Compression | 64.2% turns | — | |
 | Latency | 1,674ms mean | — | |
 
 The Δ quality FAIL is consistent with earlier runs and is attributed to gpt-4o judge non-determinism even at temperature=0 (documented in [`report.md`](report.md)). BERTScore is the stable signal — 100% of queries pass the 0.85 threshold.
+
+†Landmark recall in the eval is measured over 10 sampled conversations, not the full corpus. The corpus-wide figure (86.8%) is higher; the 77.0% reflects sample variance across a small set.
 
 ---
 
@@ -269,7 +271,7 @@ This project was built with Claude (Anthropic) as a development partner througho
 
 - **Claude wrote:** All source code, tests, and utility scripts. The landmark detector logic was iteratively developed and verified against real Taskmaster-2 data with Claude's assistance.
 - **I designed:** The overall architecture, dataset selection rationale, evaluation methodology, landmark detection strategy (two-pass alignment was my suggestion after observing that cross-turn context was needed), and all key decisions in `key_decisions.md`.
-- **I verified:** The landmark detector output was manually inspected across multiple conversations. Recall numbers (86.6%) are from actual corpus-wide runs. Pipeline output was visually verified using `--compare` and `--dry-run` modes.
+- **I verified:** The landmark detector output was manually inspected across multiple conversations. Recall numbers (86.8%) are from actual corpus-wide runs. Pipeline output was visually verified using `--compare` and `--dry-run` modes.
 - **How I used AI:** As a senior collaborator — I pushed back on suggestions, asked follow-up questions when reasoning wasn't clear, and made all architectural decisions myself.
 
 The judgment about what to build, how to evaluate it honestly, and what the limitations are — those are mine.

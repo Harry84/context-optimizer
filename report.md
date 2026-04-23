@@ -123,7 +123,7 @@ This project was built with Claude (Anthropic) as a development partner througho
 
 **I designed:** The overall architecture, dataset selection rationale, evaluation methodology, the two-pass landmark detection strategy, and all key decisions in `key_decisions.md`. The insight that chunk-based scoring was needed — because the answer to a query is spread across multiple turns, not contained in any single turn — was mine. The decision to remove hard-KEEP for landmarks in v3–v5 and let them compete in top-K was mine, as was the realisation that the landmark boost needed to be scaled by individual score to prevent query-irrelevant landmarks from dominating.
 
-**I verified:** Landmark detector output was manually inspected across multiple conversations. The 86.6% recall figure is from an actual corpus-wide run. Every compression output was read carefully using `--compare` mode before accepting it. The LLM judge variance was identified by comparing identical runs and noticing the full-context scores fluctuating — not the optimised scores.
+**I verified:** Landmark detector output was manually inspected across multiple conversations. The 86.8% recall figure is from an actual corpus-wide run (measured via utilities/corpus_landmark_recall.py against all 1,692 conversations). Every compression output was read carefully using `--compare` mode before accepting it. The LLM judge variance was identified by comparing identical runs and noticing the full-context scores fluctuating — not the optimised scores.
 
 **How I used AI:** As a senior collaborator — I pushed back when explanations were incomplete, made all architectural decisions myself, and identified every failure mode by reading the actual output rather than accepting summary statistics.
 

@@ -234,7 +234,7 @@ class LandmarkDetector(Protocol):
 - Pattern A (Offer→Confirmation): ASSISTANT[i] offer + USER[i+1] weak confirmation → both `decision`
 - Pattern B (Constraint→Echo): USER[i] slot signal + ASSISTANT[i+1] echo → both `intent`
 
-**Measured: 86.6% GT recall, 46.4% landmark rate, 53.6% compressible.**
+**Measured: 86.8% GT recall, 46.4% landmark rate, 53.6% compressible.**
 
 ---
 
@@ -349,7 +349,7 @@ python main.py --compression-strategy chunk evaluate
 - **RAG-style retrieval** — ignores turn order, cannot enforce landmark preservation for turns dissimilar to query
 - **Sliding window truncation** — drops critical early context (original intent)
 - **Summarise everything** — loses precision on exact values (prices, dates, flight numbers)
-- **LLM as default landmark detector** — net cost problem; 86.6% rule-based recall sufficient for v1
+- **LLM as default landmark detector** — net cost problem; 86.8% rule-based recall sufficient for v1
 - **Merging consecutive USER turns** — misrepresents conversational structure; bridge approach chosen instead
 - **Hard-KEEP for landmarks in top-K strategies** — query-agnostic; wastes budget on irrelevant facts. v3–v5 use landmark boost instead
 

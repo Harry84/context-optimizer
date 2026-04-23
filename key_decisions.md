@@ -85,7 +85,7 @@
 
 **Decision:** Two-pass approach: Pass 1 scores each turn individually; Pass 2 promotes turns based on cross-turn patterns.
 
-**Measured results:** GT recall 86.6%, landmark rate 46.4%, compressible 53.6%, 879 turns promoted by pass 2 (3.7% of all landmarks).
+**Measured results:** GT recall 86.8%, landmark rate 46.4%, compressible 53.6%, 879 turns promoted by pass 2 (3.7% of all landmarks).
 
 ---
 
@@ -95,7 +95,7 @@
 
 | Approach | Recall | Cost/conv | Latency |
 |---|---|---|---|
-| Rules + two-pass (v1) | 86.6% measured | Free | <5ms |
+| Rules + two-pass (v1) | 86.8% measured | Free | <5ms |
 | Embedding similarity (v2) | ~80–88% est. | Free | ~50ms |
 | LLM per conversation | ~92% est. | ~$0.01–0.03 | ~5s |
 

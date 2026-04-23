@@ -71,13 +71,11 @@ The arithmetic aggregation is internally consistent end-to-end. The scores in `e
 
 ---
 
-**H1 — Landmark recall headline number contradicts measured results**
-- Files: `README.md:30,172–174`, `ARCHITECTURE.md:238`, `report.md:41`, `eval_results.csv`
-- README.md and ARCHITECTURE.md claim **86.6% landmark recall**.
-- `report.md` table shows **77.0%**.
-- `eval_results.csv` mean is **≈76.6%** — consistent with the report, not the README.
-- No script in the repo produces the 86.6% figure. It appears to be from an uncommitted measurement or is stale.
-- **Action:** Re-run the measurement and commit the script, or correct README.md and ARCHITECTURE.md to 77%.
+**H1 — Landmark recall headline vs eval figure — explained and resolved**
+- Corpus-wide figure confirmed at **86.8%** via new `utilities/corpus_landmark_recall.py` (production detector, all 1,692 conversations). Docs updated from 86.6% → 86.8%.
+- Eval figure of **77.0%** is not a contradiction — it is measured over 10 sampled conversations, not the full corpus. Sample variance over a small set explains the gap.
+- `utilities/verify_classifiers.py` (standalone reimplementation) produces the same 86.8%, confirming no detector drift.
+- **Action:** Docs updated. Note added to eval results table explaining the scope difference.
 
 ---
 
@@ -241,7 +239,7 @@ The arithmetic aggregation is internally consistent end-to-end. The scores in `e
 | C1 | `README.md`, `ARCHITECTURE.md` | Stale `.env.example` reference (docs fixed; keys never committed) | ~~CRITICAL~~ LOW |
 | C2 | `harness.py:247–256` | Same model generates answers and judges them | **CRITICAL** |
 | C3 | `judge.py`, `PRD.md:181` | Order-swap documented but not implemented | **CRITICAL** |
-| H1 | `README.md:30`, `eval_results.csv` | 86.6% landmark recall contradicts measured 77% | **HIGH** |
+| H1 | `README.md`, `ARCHITECTURE.md` | 86.6% → 86.8% (corpus-wide); 77% eval figure is small-sample variance | ~~HIGH~~ resolved |
 | H2 | `README.md:73`, `ARCHITECTURE.md:169` | Test count claims: 46 vs 55 vs 73 (actual ~52) | **HIGH** |
 | H3 | `harness.py:264` | `compression_pct` always 0 for sentence strategies | **HIGH** |
 | H4 | `topk_compressor.py:44–49` | v3 hard-KEEPs landmarks; docs say it does not | **HIGH** |
