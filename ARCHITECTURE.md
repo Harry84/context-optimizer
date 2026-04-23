@@ -168,8 +168,7 @@ context_optimizer/
 ├── utilities/                             # Inspection and audit scripts
 ├── tests/                                 # pytest suite (73 tests, no LLM calls)
 ├── main.py                                # CLI: stats, inspect, evaluate
-├── .env                                   # API keys (gitignored)
-└── .env.example                           # Template (committed)
+└── .env                                   # API keys (gitignored)
 ```
 
 ---
@@ -235,7 +234,7 @@ class LandmarkDetector(Protocol):
 - Pattern A (Offer→Confirmation): ASSISTANT[i] offer + USER[i+1] weak confirmation → both `decision`
 - Pattern B (Constraint→Echo): USER[i] slot signal + ASSISTANT[i+1] echo → both `intent`
 
-**Measured: 86.6% GT recall, 46.4% landmark rate, 53.6% compressible.**
+**Measured: 86.8% GT recall, 46.4% landmark rate, 53.6% compressible.**
 
 ---
 
@@ -247,13 +246,15 @@ class LandmarkDetector(Protocol):
 S(t, q) = w1·keyword(t,q) + w2·semantic(t,q) + w3·recency(t,Q) + landmark_boost(t)
 ```
 
-**Weights by query type:**
+**Weights by query type (v1 only):**
 
 | Query Type | keyword | semantic | recency |
 |---|---|---|---|
-| Factual | 0.3 | 0.5 | 0.2 |
-| Analytical | 0.2 | 0.4 | 0.4 |
-| Preference | 0.2 | 0.3 | 0.5 |
+| Factual | 0.35 | 0.50 | 0.15 |
+| Analytical | 0.20 | 0.40 | 0.40 |
+| Preference | 0.20 | 0.30 | 0.50 |
+
+v2/v4/v5 use fixed weights `(0.35, 0.50, 0.15)` regardless of query type — equivalent to the factual profile. Query type still drives thresholds and top-K fractions in those strategies.
 
 ---
 
@@ -273,7 +274,7 @@ Landmark turns split into sentences. Only landmark sentences hard-KEEPed. Non-la
 
 ### 8.3 v3 — Top-K Retrieval (`topk_compressor.py`)
 
-No hard-KEEP for landmarks — they receive +0.3 boost but compete in top-K pool. Non-landmark turns below `topk_min_score=0.30` always compressed. Top K% kept via `topk_fraction` (factual=20%, analytical=35%, preference=25%).
+Landmarks are hard-KEEPed (same as v1/v2). Non-landmark turns below `topk_min_score=0.30` always compressed. Remaining non-landmark turns ranked by score; top K% kept via `topk_fraction` (factual=20%, analytical=35%, preference=25%).
 
 **Eval: 21% token reduction, Δquality -0.06. Quality risk: relevant turns can fall outside top-K.**
 
@@ -350,7 +351,7 @@ python main.py --compression-strategy chunk evaluate
 - **RAG-style retrieval** — ignores turn order, cannot enforce landmark preservation for turns dissimilar to query
 - **Sliding window truncation** — drops critical early context (original intent)
 - **Summarise everything** — loses precision on exact values (prices, dates, flight numbers)
-- **LLM as default landmark detector** — net cost problem; 86.6% rule-based recall sufficient for v1
+- **LLM as default landmark detector** — net cost problem; 86.8% rule-based recall sufficient for v1
 - **Merging consecutive USER turns** — misrepresents conversational structure; bridge approach chosen instead
 - **Hard-KEEP for landmarks in top-K strategies** — query-agnostic; wastes budget on irrelevant facts. v3–v5 use landmark boost instead
 

@@ -26,7 +26,7 @@ Evaluation reports token reduction %, answer quality (LLM-as-judge, 4-dimension 
 1,692 conversations ≥20 turns. Mean 30.2 turns, max 85 turns.
 Conversations follow a goal-directed pattern — user establishes constraints, compares options, makes decisions — structurally analogous to LEC trade logistics enquiries.
 
-Slot annotations per utterance serve as independent ground truth for landmark detection recall (86.6% measured across the full corpus).
+Slot annotations per utterance serve as independent ground truth for landmark detection recall (86.8% measured across the full corpus).
 
 ---
 
@@ -52,7 +52,7 @@ Downloads `data/taskmaster2/flights.json` (~8MB). The `data/` directory is gitig
 
 ### 3. Set API keys
 
-Copy `.env.example` to `.env` and fill in your keys:
+Create a `.env` file in the project root with your keys:
 
 ```
 OPENAI_API_KEY=sk-proj-...
@@ -70,7 +70,7 @@ Landmark detection and embedding scoring run locally — no API key needed for t
 pytest tests/ -v
 ```
 
-All 46 tests pass without any LLM API calls.
+All tests pass without any LLM API calls.
 
 ### 5. Inspect a conversation (dry run — no API calls)
 
@@ -103,11 +103,36 @@ python main.py stats
 ### 8. Run full evaluation
 
 ```bash
+# Default strategy (v1 — turn-level)
 python main.py evaluate
+
+# Per-strategy evals
+python main.py --compression-strategy chunk evaluate
+python main.py --compression-strategy sentence evaluate
+python main.py --compression-strategy topk evaluate
+python main.py --compression-strategy topk-sentence evaluate
 ```
 
-Runs on 10 sampled conversations × 2 queries each (~$1–2 OpenAI cost).
-Outputs `eval_results.csv` and prints acceptance bar summary.
+Runs on 10 sampled conversations × 2 queries each (~$1–2 OpenAI cost per run).
+Outputs `eval_results.csv` (or `eval_results_<strategy>.csv`) and prints acceptance bar summary.
+
+Answer generation uses `--generator` (default `gpt-4o-mini`); judging uses `--judge` (default `gpt-4o`).
+
+### 9. Inspect a synthetic conversation
+
+```bash
+python main.py \
+  --data-path "data/synthetic/synthetic_flights.json" \
+  --min-turns 5 \
+  --compression-strategy chunk \
+  inspect \
+  --conv-id syn-001-rambling-holiday \
+  --query "What flights were compared and what did the user decide?" \
+  --query-pos 20 \
+  --compare
+```
+
+Useful for validating compression behaviour on short, predictable conversations without touching the main corpus.
 
 ---
 
@@ -129,7 +154,7 @@ flights.json
     │           — action items (commitment patterns)
     │           — conversation-close signals ("that's all", "goodbye", etc.)
     │  Pass 2: cross-turn alignment (offer→confirmation, constraint→echo)
-    │  86.6% GT recall, <5ms per conversation
+    │  86.8% GT recall, <5ms per conversation
     ▼
 [Stage 3] Relevance Scoring
     │  Query classified: factual / analytical / preference
@@ -169,7 +194,7 @@ Four categories — three from the assignment specification plus conversation-cl
 Detection is **text and speaker role only** — slot annotations are never used in detection, only in evaluation.
 
 Measured corpus-wide (1,692 conversations, ≥20 turns):
-- GT recall: **86.6%**
+- GT recall: **86.8%**
 - Landmark rate: **46.4%** of all turns
 - Compressible: **53.6%** of all turns
 
@@ -177,13 +202,13 @@ Measured corpus-wide (1,692 conversations, ≥20 turns):
 
 ## Adaptive compression
 
-Query type drives compression aggressiveness:
+Query type drives compression aggressiveness. Weights apply to v1 only; v2/v4/v5 use fixed weights `(0.35, 0.50, 0.15)` but query type still drives thresholds and top-K fractions.
 
 | Query Type | Keyword w | Semantic w | Recency w | High thresh | Low thresh |
 |---|---|---|---|---|---|
-| Factual | 0.3 | 0.5 | 0.2 | 0.6 | 0.3 |
-| Analytical | 0.2 | 0.4 | 0.4 | 0.5 | 0.25 |
-| Preference | 0.2 | 0.3 | 0.5 | 0.45 | 0.2 |
+| Factual | 0.35 | 0.50 | 0.15 | 0.72 | 0.45 |
+| Analytical | 0.20 | 0.40 | 0.40 | 0.65 | 0.40 |
+| Preference | 0.20 | 0.30 | 0.50 | 0.60 | 0.35 |
 
 ---
 
@@ -199,6 +224,27 @@ LLM-as-judge, 4 dimensions (1–10 each), temperature=0:
 | Hallucination | No ungrounded information introduced (10 = none) |
 
 Independent metric: **BERTScore F1** (roberta-large, local). Threshold ≥ 0.85.
+
+Answer generation uses `gpt-4o-mini`; judging uses `gpt-4o` (separate models to avoid self-grading bias).
+
+---
+
+## Evaluation results — v5 chunk (latest)
+
+10 conversations × 2 queries each, Taskmaster-2 flights corpus, `--compression-strategy chunk`.
+
+| Metric | Result | Target | Status |
+|---|---|---|---|
+| Token reduction | 45.4% | 40–60% | ✓ PASS |
+| Quality Δ (LLM judge) | +0.86 | ≥ 0 | ✓ PASS |
+| BERTScore F1 | 0.949 | ≥ 0.85 | ✓ PASS |
+| BERTScore ≥ 0.85 | 100% of queries | — | ✓ |
+| Quality (full context) | 6.28 | — | |
+| Quality (optimised) | 7.14 | — | |
+| Compression | 64.2% turns | — | |
+| Latency | 1,557ms mean | — | |
+
+**All three acceptance bars pass.** The optimised context outperforms full context by +0.86 quality points — when asked meaningful questions about late-conversation outcomes (decisions, bookings), the compressed context lets the LLM find answers more cleanly than the noise-heavy full history. The full context quality of 6.28 (vs 9.01 in prior runs) reflects harder, more representative questions now being selected — the previous eval query selector only saw the first 15 turns of each conversation and systematically picked easy questions answerable from the opening exchanges. See [`report.md`](report.md) for full methodology notes.
 
 ---
 
@@ -222,7 +268,7 @@ This project was built with Claude (Anthropic) as a development partner througho
 
 - **Claude wrote:** All source code, tests, and utility scripts. The landmark detector logic was iteratively developed and verified against real Taskmaster-2 data with Claude's assistance.
 - **I designed:** The overall architecture, dataset selection rationale, evaluation methodology, landmark detection strategy (two-pass alignment was my suggestion after observing that cross-turn context was needed), and all key decisions in `key_decisions.md`.
-- **I verified:** The landmark detector output was manually inspected across multiple conversations. Recall numbers (86.6%) are from actual corpus-wide runs. Pipeline output was visually verified using `--compare` and `--dry-run` modes.
+- **I verified:** The landmark detector output was manually inspected across multiple conversations. Recall numbers (86.8%) are from actual corpus-wide runs. Pipeline output was visually verified using `--compare` and `--dry-run` modes.
 - **How I used AI:** As a senior collaborator — I pushed back on suggestions, asked follow-up questions when reasoning wasn't clear, and made all architectural decisions myself.
 
 The judgment about what to build, how to evaluate it honestly, and what the limitations are — those are mine.

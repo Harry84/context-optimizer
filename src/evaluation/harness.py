@@ -76,10 +76,10 @@ def _token_count(thread: list[dict]) -> int:
     return sum(len(_tokeniser.encode(msg.get("content", ""))) for msg in thread)
 
 
-def _conversation_snippet(conv: Conversation, n_turns: int = 15) -> str:
-    """Return the first n_turns as a readable string for the query selector."""
+def _conversation_snippet(turns: list, n_turns: int = 15) -> str:
+    """Return up to the last n_turns as a readable string for the query selector."""
     lines = []
-    for turn in conv.turns[:n_turns]:
+    for turn in turns[-n_turns:]:
         role = "User" if turn.speaker == "USER" else "Assistant"
         lines.append(f"{role}: {turn.text}")
     return "\n".join(lines)
@@ -89,16 +89,20 @@ def select_queries(conv: Conversation, model: str = "gpt-4o-mini") -> list["Eval
     """
     Pick the 2 most answerable queries from QUERY_POOL for this conversation.
 
-    Sends the first 15 turns to gpt-4o-mini and asks it to select the two
-    pool indices whose questions are most grounded in what actually happened.
+    Computes the query position first, then sends the 15 turns immediately
+    before that position to gpt-4o-mini so the selector sees the most relevant
+    context rather than always the opening turns.
     Falls back to indices [0, 8] (factual + analytical defaults) on any error.
     """
-    snippet = _conversation_snippet(conv, n_turns=15)
+    n     = len(conv.turns)
+    q_pos = max(5, int(n * 0.75))
+
+    snippet = _conversation_snippet(conv.turns[:q_pos], n_turns=15)
     pool_lines = "\n".join(
         f"{i}: {q}" for i, (q, _) in enumerate(QUERY_POOL)
     )
 
-    prompt = f"""Here is the start of a flight booking conversation:
+    prompt = f"""Here is an excerpt from a flight booking conversation (the final turns before the query point):
 
 {snippet}
 
@@ -125,9 +129,6 @@ question where possible. Return ONLY a JSON object like: {{"indices": [i, j]}}""
     except Exception as e:
         logger.warning("Query selection failed for %s (%s) — using defaults", conv.conversation_id, e)
         indices = [0, 8]  # "What flights were compared" + "Why did the user choose"
-
-    n     = len(conv.turns)
-    q_pos = max(5, int(n * 0.75))
 
     return [
         EvalQuery(
@@ -244,8 +245,8 @@ def _evaluate_one(conv: Conversation, eq: EvalQuery, config: OptimizerConfig) ->
 
     token_reduction = (full_tokens - opt_tokens) / full_tokens * 100 if full_tokens > 0 else 0.0
 
-    answer_full = _generate_answer(full_thread, eq.query_text, config.judge_model)
-    answer_opt  = _generate_answer(opt_thread,  eq.query_text, config.judge_model)
+    answer_full = _generate_answer(full_thread, eq.query_text, config.generator_model)
+    answer_opt  = _generate_answer(opt_thread,  eq.query_text, config.generator_model)
 
     scores_full, scores_opt = judge_pair(
         query=eq.query_text,

@@ -1,6 +1,6 @@
 # Test Suite
 
-55 tests across 6 files. No LLM API calls anywhere — all external dependencies are either mocked, use local fixtures, or test pure logic. Tests run in ~3 seconds.
+73 tests across 6 files. No LLM API calls anywhere — all external dependencies are either mocked, use local fixtures, or test pure logic. Tests run in ~3 seconds.
 
 ---
 

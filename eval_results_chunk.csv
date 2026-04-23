@@ -1,21 +1,21 @@
 conversation_id,query_text,query_type,turns_in_history,full_tokens,opt_tokens,token_reduction_pct,quality_full,quality_opt,delta_quality,bertscore_f1,landmark_recall,compression_pct,integrity_repairs,latency_ms
-dlg-cbfc519d-93e3-404d-9db5-c5fe35a5b765,What was the price of the flight the user selected?,factual,63,451,242,46.3,10.0,10.0,0.0,0.996,0.474,63.5,7,4109.7
-dlg-cbfc519d-93e3-404d-9db5-c5fe35a5b765,What travel dates did the user specify?,factual,63,451,223,50.6,10.0,10.0,0.0,1.0,0.474,63.5,10,1551.1
-dlg-1ba9261a-c73e-4fee-ad4b-49755963ac71,What travel dates did the user specify?,factual,39,375,232,38.1,10.0,10.0,0.0,1.0,0.889,64.1,6,1801.0
-dlg-1ba9261a-c73e-4fee-ad4b-49755963ac71,What were the user's stated preferences for this trip?,preference,39,375,183,51.2,10.0,9.5,-0.5,0.905,0.889,64.1,7,1263.9
-dlg-043bd810-4705-4ac9-8445-89f8d7a09038,What travel dates did the user specify?,factual,51,497,301,39.4,10.0,10.0,0.0,1.0,0.821,64.7,6,2880.4
-dlg-043bd810-4705-4ac9-8445-89f8d7a09038,What constraints did the user place on the booking and were they met?,analytical,51,497,246,50.5,10.0,9.5,-0.5,0.903,0.821,64.7,7,2184.9
-dlg-e5d4d3c3-455b-4aed-96c8-04dded87827e,What airports were involved in this booking?,factual,38,182,111,39.0,9.25,9.5,0.25,0.969,0.889,63.2,3,198.9
-dlg-e5d4d3c3-455b-4aed-96c8-04dded87827e,What travel dates did the user specify?,factual,38,182,108,40.7,10.0,9.75,-0.25,0.94,0.889,63.2,5,194.7
-dlg-4fadf26c-e950-4ac5-9156-d6e9b5e54e2c,What airports were involved in this booking?,factual,37,380,204,46.3,10.0,5.0,-5.0,0.865,0.762,64.9,4,937.5
-dlg-4fadf26c-e950-4ac5-9156-d6e9b5e54e2c,What constraints did the user place on the booking and were they met?,analytical,37,380,178,53.2,9.0,8.0,-1.0,0.873,0.762,64.9,2,3992.7
-dlg-45774653-96c9-4ee5-9549-7816b9d14ac8,What travel dates did the user specify?,factual,50,366,227,38.0,10.0,10.0,0.0,0.991,0.792,64.0,10,380.0
-dlg-45774653-96c9-4ee5-9549-7816b9d14ac8,What were the user's stated preferences for this trip?,preference,50,366,198,45.9,9.5,9.25,-0.25,0.932,0.792,64.0,8,376.2
-dlg-41802dc9-48d5-4400-ac1d-ef57eb1aae29,What airports were involved in this booking?,factual,40,294,171,41.8,8.25,5.0,-3.25,0.893,0.81,65.0,10,308.7
-dlg-41802dc9-48d5-4400-ac1d-ef57eb1aae29,What travel dates did the user specify?,factual,40,294,183,37.8,10.0,10.0,0.0,0.989,0.81,65.0,6,1688.4
-dlg-238fc01e-b1f7-41b8-9eca-f72966c15858,What travel dates did the user specify?,factual,50,557,333,40.2,10.0,10.0,0.0,1.0,0.773,64.0,5,2056.6
-dlg-238fc01e-b1f7-41b8-9eca-f72966c15858,What were the user's stated preferences for this trip?,preference,50,557,320,42.5,9.25,9.5,0.25,0.953,0.773,64.0,3,2086.1
-dlg-1450042a-7d3a-463f-9a6b-ff0b8501982c,What was the price of the flight the user selected?,factual,38,290,148,49.0,10.0,10.0,0.0,1.0,0.667,63.2,4,1398.8
-dlg-1450042a-7d3a-463f-9a6b-ff0b8501982c,What constraints did the user place on the booking and were they met?,analytical,38,290,156,46.2,9.25,9.0,-0.25,0.918,0.667,63.2,9,2011.8
-dlg-d4eb01db-480e-48bd-baf5-81d49cd2d496,What flights were compared and what did the user decide?,factual,40,362,224,38.1,9.5,8.75,-0.75,0.881,0.824,65.0,6,1542.0
-dlg-d4eb01db-480e-48bd-baf5-81d49cd2d496,What constraints did the user place on the booking and were they met?,analytical,40,362,240,33.7,8.75,8.75,0.0,0.927,0.824,65.0,5,2063.6
+dlg-cbfc519d-93e3-404d-9db5-c5fe35a5b765,What flights were compared and what did the user decide?,factual,63,451,210,53.4,3.75,10.0,6.25,0.937,0.474,63.5,7,5316.0
+dlg-cbfc519d-93e3-404d-9db5-c5fe35a5b765,What airports were involved in this booking?,factual,63,451,245,45.7,1.0,4.5,3.5,0.958,0.474,63.5,11,2569.8
+dlg-1ba9261a-c73e-4fee-ad4b-49755963ac71,What were the departure and arrival times of the chosen flight?,factual,39,375,184,50.9,1.0,1.0,0.0,0.96,0.889,64.1,5,1361.3
+dlg-1ba9261a-c73e-4fee-ad4b-49755963ac71,What constraints did the user place on the booking and were they met?,analytical,39,375,218,41.9,9.25,8.25,-1.0,0.916,0.889,64.1,11,1108.3
+dlg-043bd810-4705-4ac9-8445-89f8d7a09038,What were the departure and arrival times of the chosen flight?,factual,51,497,273,45.1,1.0,1.0,0.0,0.958,0.821,64.7,6,1139.1
+dlg-043bd810-4705-4ac9-8445-89f8d7a09038,"Were there any layovers, and if so where and how long?",factual,51,497,267,46.3,1.0,1.0,0.0,0.929,0.821,64.7,4,1705.8
+dlg-e5d4d3c3-455b-4aed-96c8-04dded87827e,What seat class did the user request?,factual,38,182,102,44.0,10.0,10.0,0.0,1.0,0.889,63.2,4,896.7
+dlg-e5d4d3c3-455b-4aed-96c8-04dded87827e,What were the user's stated preferences for this trip?,preference,38,182,122,33.0,10.0,9.25,-0.75,0.952,0.889,63.2,7,188.5
+dlg-4fadf26c-e950-4ac5-9156-d6e9b5e54e2c,What flights were compared and what did the user decide?,factual,37,380,193,49.2,9.5,9.5,0.0,0.915,0.762,64.9,4,999.9
+dlg-4fadf26c-e950-4ac5-9156-d6e9b5e54e2c,"Were there any layovers, and if so where and how long?",factual,37,380,209,45.0,1.0,1.0,0.0,0.94,0.762,64.9,4,917.0
+dlg-45774653-96c9-4ee5-9549-7816b9d14ac8,What travel dates did the user specify?,factual,50,366,227,38.0,10.0,10.0,0.0,0.991,0.792,64.0,10,381.0
+dlg-45774653-96c9-4ee5-9549-7816b9d14ac8,What constraints did the user place on the booking and were they met?,analytical,50,366,203,44.5,8.75,7.25,-1.5,0.914,0.792,64.0,11,974.8
+dlg-41802dc9-48d5-4400-ac1d-ef57eb1aae29,What was the price of the flight the user selected?,factual,40,294,161,45.2,10.0,10.0,0.0,1.0,0.81,65.0,9,1125.5
+dlg-41802dc9-48d5-4400-ac1d-ef57eb1aae29,What were the user's stated preferences for this trip?,preference,40,294,155,47.3,10.0,8.75,-1.25,0.868,0.81,65.0,9,1833.0
+dlg-238fc01e-b1f7-41b8-9eca-f72966c15858,What were the departure and arrival times of the chosen flight?,factual,50,557,295,47.0,5.0,10.0,5.0,0.97,0.773,64.0,6,1134.4
+dlg-238fc01e-b1f7-41b8-9eca-f72966c15858,"Were there any layovers, and if so where and how long?",factual,50,557,256,54.0,1.0,8.25,7.25,0.99,0.773,64.0,7,2500.7
+dlg-1450042a-7d3a-463f-9a6b-ff0b8501982c,What flights were compared and what did the user decide?,factual,38,290,151,47.9,8.75,9.0,0.25,0.927,0.667,63.2,9,2863.8
+dlg-1450042a-7d3a-463f-9a6b-ff0b8501982c,What was the price of the flight the user selected?,factual,38,290,151,47.9,10.0,10.0,0.0,1.0,0.667,63.2,4,909.6
+dlg-d4eb01db-480e-48bd-baf5-81d49cd2d496,What flights were compared and what did the user decide?,factual,40,362,226,37.6,9.75,8.0,-1.75,0.878,0.824,65.0,6,1077.6
+dlg-d4eb01db-480e-48bd-baf5-81d49cd2d496,"Were there any layovers, and if so where and how long?",factual,40,362,202,44.2,4.75,6.0,1.25,0.974,0.824,65.0,6,2135.6

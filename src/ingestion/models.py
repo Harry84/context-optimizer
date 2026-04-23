@@ -105,6 +105,7 @@ class OptimizerConfig:
     # Model names
     embedding_model: str = "all-MiniLM-L6-v2"
     summarisation_model: str = "gpt-4o-mini"
+    generator_model: str = "gpt-4o-mini"
     judge_model: str = "gpt-4o"
 
     # Corpus
