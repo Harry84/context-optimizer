@@ -135,7 +135,7 @@ S(t, q) = w1·keyword(t,q) + w2·semantic(t,q) + w3·recency(t) + landmark_boost
 | **Recency decay** | `exp(-λ · (N - turn_index))`, λ=0.05 initial | Tunable; recent turns score higher |
 | **Landmark boost** | +0.3 if turn classified as landmark | Binary; overrides low score in assembly |
 
-Weights `w1, w2, w3` adjusted per query type (§8).
+Weights `w1, w2, w3` adjusted per query type in v1. v2/v4/v5 use fixed weights `(0.35, 0.50, 0.15)` — the factual profile — regardless of query type. Query type still drives thresholds and top-K fractions.
 
 ---
 

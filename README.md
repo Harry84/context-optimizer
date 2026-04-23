@@ -202,13 +202,13 @@ Measured corpus-wide (1,692 conversations, ≥20 turns):
 
 ## Adaptive compression
 
-Query type drives compression aggressiveness:
+Query type drives compression aggressiveness. Weights apply to v1 only; v2/v4/v5 use fixed weights `(0.35, 0.50, 0.15)` but query type still drives thresholds and top-K fractions.
 
 | Query Type | Keyword w | Semantic w | Recency w | High thresh | Low thresh |
 |---|---|---|---|---|---|
-| Factual | 0.3 | 0.5 | 0.2 | 0.6 | 0.3 |
-| Analytical | 0.2 | 0.4 | 0.4 | 0.5 | 0.25 |
-| Preference | 0.2 | 0.3 | 0.5 | 0.45 | 0.2 |
+| Factual | 0.35 | 0.50 | 0.15 | 0.72 | 0.45 |
+| Analytical | 0.20 | 0.40 | 0.40 | 0.65 | 0.40 |
+| Preference | 0.20 | 0.30 | 0.50 | 0.60 | 0.35 |
 
 ---
 

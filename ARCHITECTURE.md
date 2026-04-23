@@ -246,13 +246,15 @@ class LandmarkDetector(Protocol):
 S(t, q) = w1·keyword(t,q) + w2·semantic(t,q) + w3·recency(t,Q) + landmark_boost(t)
 ```
 
-**Weights by query type:**
+**Weights by query type (v1 only):**
 
 | Query Type | keyword | semantic | recency |
 |---|---|---|---|
-| Factual | 0.3 | 0.5 | 0.2 |
-| Analytical | 0.2 | 0.4 | 0.4 |
-| Preference | 0.2 | 0.3 | 0.5 |
+| Factual | 0.35 | 0.50 | 0.15 |
+| Analytical | 0.20 | 0.40 | 0.40 |
+| Preference | 0.20 | 0.30 | 0.50 |
+
+v2/v4/v5 use fixed weights `(0.35, 0.50, 0.15)` regardless of query type — equivalent to the factual profile. Query type still drives thresholds and top-K fractions in those strategies.
 
 ---
 
