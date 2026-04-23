@@ -235,19 +235,16 @@ Answer generation uses `gpt-4o-mini`; judging uses `gpt-4o` (separate models to 
 
 | Metric | Result | Target | Status |
 |---|---|---|---|
-| Token reduction | 43.7% | 40–60% | ✓ PASS |
-| Quality Δ (LLM judge) | -0.21 | ≥ 0 | ✗ FAIL |
-| BERTScore F1 | 0.927 | ≥ 0.85 | ✓ PASS |
+| Token reduction | 45.4% | 40–60% | ✓ PASS |
+| Quality Δ (LLM judge) | +0.86 | ≥ 0 | ✓ PASS |
+| BERTScore F1 | 0.949 | ≥ 0.85 | ✓ PASS |
 | BERTScore ≥ 0.85 | 100% of queries | — | ✓ |
-| Landmark recall | 77.0%† | — | Reported |
-| Quality (full context) | 9.01 | — | |
-| Quality (optimised) | 8.80 | — | |
+| Quality (full context) | 6.28 | — | |
+| Quality (optimised) | 7.14 | — | |
 | Compression | 64.2% turns | — | |
-| Latency | 1,674ms mean | — | |
+| Latency | 1,557ms mean | — | |
 
-The Δ quality FAIL is consistent with earlier runs and is attributed to gpt-4o judge non-determinism even at temperature=0 (documented in [`report.md`](report.md)). BERTScore is the stable signal — 100% of queries pass the 0.85 threshold.
-
-†Landmark recall in the eval is measured over 10 sampled conversations, not the full corpus. The corpus-wide figure (86.8%) is higher; the 77.0% reflects sample variance across a small set.
+**All three acceptance bars pass.** The optimised context outperforms full context by +0.86 quality points — when asked meaningful questions about late-conversation outcomes (decisions, bookings), the compressed context lets the LLM find answers more cleanly than the noise-heavy full history. The full context quality of 6.28 (vs 9.01 in prior runs) reflects harder, more representative questions now being selected — the previous eval query selector only saw the first 15 turns of each conversation and systematically picked easy questions answerable from the opening exchanges. See [`report.md`](report.md) for full methodology notes.
 
 ---
 
