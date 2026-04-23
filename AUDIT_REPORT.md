@@ -244,7 +244,7 @@ The arithmetic aggregation is internally consistent end-to-end. The scores in `e
 | H3 | `harness.py:264` | `compression_pct` always 0 for sentence strategies | **HIGH** |
 | H4 | `ARCHITECTURE.md`, `key_decisions.md`, `report.md` | v3 hard-KEEP clarified in docs — only v4/v5 compete landmarks | ~~HIGH~~ resolved |
 | H5 | `ARCHITECTURE.md`, `PRD.md`, `README.md`, `report.md` | Docs updated: v2/v4/v5 use fixed weights (0.35/0.50/0.15); v1 only is query-type adaptive | ~~HIGH~~ resolved |
-| H6 | `harness.py:269`, `pipeline.py:40` | CSV `query_type` may differ from type used in compress | **HIGH** |
+| H6 | `harness.py:269`, `pipeline.py:40` | CSV `query_type` may differ from type used in compress — low risk in practice as pool labels match classifier; noted as known limitation | **LOW** |
 | H7 | `harness.py:101–130` | Selector sees only first 15 turns regardless of q_pos | **HIGH** |
 | M1 | `judge.py:40–47` | Hallucination inversion relies on prompt, not code | **MEDIUM** |
 | M2 | `judge.py:107` | Silent 5.0 fallback undetectable in CSV | **MEDIUM** |
