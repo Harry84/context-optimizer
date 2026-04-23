@@ -261,8 +261,10 @@ def _evaluate_one(conv: Conversation, eq: EvalQuery, config: OptimizerConfig) ->
     history    = conv.turns[:eq.query_position]
     lm_recall  = landmark_recall(history)
 
-    total      = len(history)
-    compressed = sum(1 for t in history if t.disposition == "COMPRESS")
+    total = len(history)
+    units_in    = assembly_stats.total_turns_in
+    units_kept  = assembly_stats.kept_verbatim
+    compressed  = units_in - units_kept
 
     return EvalResult(
         conversation_id=conv.conversation_id,
@@ -277,7 +279,7 @@ def _evaluate_one(conv: Conversation, eq: EvalQuery, config: OptimizerConfig) ->
         delta_quality=round(scores_opt.mean - scores_full.mean, 2),
         bertscore_f1=round(bertscore, 3) if bertscore is not None else None,
         landmark_recall=round(lm_recall, 3),
-        compression_pct=round(compressed / total * 100, 1) if total > 0 else 0.0,
+        compression_pct=round(compressed / units_in * 100, 1) if units_in > 0 else 0.0,
         integrity_repairs=assembly_stats.integrity_repairs,
         latency_ms=round(latency_ms, 1),
     )
