@@ -272,7 +272,7 @@ Landmark turns split into sentences. Only landmark sentences hard-KEEPed. Non-la
 
 ### 8.3 v3 — Top-K Retrieval (`topk_compressor.py`)
 
-No hard-KEEP for landmarks — they receive +0.3 boost but compete in top-K pool. Non-landmark turns below `topk_min_score=0.30` always compressed. Top K% kept via `topk_fraction` (factual=20%, analytical=35%, preference=25%).
+Landmarks are hard-KEEPed (same as v1/v2). Non-landmark turns below `topk_min_score=0.30` always compressed. Remaining non-landmark turns ranked by score; top K% kept via `topk_fraction` (factual=20%, analytical=35%, preference=25%).
 
 **Eval: 21% token reduction, Δquality -0.06. Quality risk: relevant turns can fall outside top-K.**
 

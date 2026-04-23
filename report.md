@@ -15,7 +15,7 @@ The Context Optimizer takes a multi-turn conversation and a current query and re
 
 **Compression — v2 (sentence-level):** for landmark turns, splits the text into sentences using NLTK's punkt tokeniser, re-runs landmark pattern matching at sentence level, and scores non-landmark sentences independently against the query. Sentences with the same effective disposition from the same turn are merged back before assembly to prevent structural fragmentation.
 
-**Compression — v3 (top-K retrieval):** non-landmark turns ranked by composite score descending; top K% kept, rest compressed. Landmarks receive a boost but are not hard-KEEPed. A noise floor (`topk_min_score=0.30`) prevents low-quality turns filling K slots.
+**Compression — v3 (top-K retrieval):** landmarks hard-KEEPed (same as v1/v2); non-landmark turns ranked by composite score descending; top K% kept, rest compressed. A noise floor (`topk_min_score=0.30`) prevents low-quality turns filling K slots.
 
 **Compression — v4 (top-K sentence):** combines v2 sentence splitting with v3 top-K. All units (landmark sentences and non-landmark turns) scored against the query and ranked together. Landmarks receive a scaled boost (boost × individual score) to prevent query-irrelevant landmarks from inflating their score.
 

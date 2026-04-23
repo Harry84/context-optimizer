@@ -242,7 +242,7 @@ The arithmetic aggregation is internally consistent end-to-end. The scores in `e
 | H1 | `README.md`, `ARCHITECTURE.md` | 86.6% → 86.8% (corpus-wide); 77% eval figure is small-sample variance | ~~HIGH~~ resolved |
 | H2 | `README.md:73`, `ARCHITECTURE.md:169` | Test count claims: 46 vs 55 vs 73 (actual ~52) | **HIGH** |
 | H3 | `harness.py:264` | `compression_pct` always 0 for sentence strategies | **HIGH** |
-| H4 | `topk_compressor.py:44–49` | v3 hard-KEEPs landmarks; docs say it does not | **HIGH** |
+| H4 | `ARCHITECTURE.md`, `key_decisions.md`, `report.md` | v3 hard-KEEP clarified in docs — only v4/v5 compete landmarks | ~~HIGH~~ resolved |
 | H5 | `sentence_compressor.py:133` et al. | Scoring weights hardcoded, query-type config ignored | **HIGH** |
 | H6 | `harness.py:269`, `pipeline.py:40` | CSV `query_type` may differ from type used in compress | **HIGH** |
 | H7 | `harness.py:101–130` | Selector sees only first 15 turns regardless of q_pos | **HIGH** |

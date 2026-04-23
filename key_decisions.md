@@ -147,15 +147,15 @@
 
 ---
 
-## KD-017 — Top-K Retrieval: Landmarks Compete Rather Than Hard-KEEP
+## KD-017 — Top-K Retrieval: Landmarks Compete Rather Than Hard-KEEP (v4/v5 only)
 
-**Decision:** In v3–v5, landmarks receive a score boost but are not hard-KEEPed — they compete in the same top-K pool as non-landmark turns.
+**Decision:** In v4–v5, landmarks receive a scaled score boost but are not hard-KEEPed — they compete in the same top-K pool as non-landmark turns. v3 retains hard-KEEP for landmarks (same as v1/v2).
 
 **Motivation:** Landmark detection is query-agnostic. A turn flagged as a landmark because it contains a date slot is not relevant to a query about prices. Hard-KEEPing all landmarks wastes context budget on query-irrelevant facts.
 
-**Trade-off:** The landmark boost (+0.3, or scaled by individual score in v4/v5) biases the ranking toward landmarks without guaranteeing their survival. Query-irrelevant landmarks can be compressed. The risk is that a genuinely relevant landmark might score below the top-K threshold if the conversation contains many high-scoring non-landmark turns — this is the documented failure mode for airport queries.
+**Trade-off:** The scaled landmark boost (boost × individual score in v4/v5) biases the ranking toward landmarks without guaranteeing their survival. Query-irrelevant landmarks can be compressed. The risk is that a genuinely relevant landmark might score below the top-K threshold if the conversation contains many high-scoring non-landmark turns — this is the documented failure mode for airport queries.
 
-**In v1/v2:** landmarks remain hard-KEEPed. These strategies are conservative by design.
+**In v1/v2/v3:** landmarks remain hard-KEEPed. These strategies are conservative by design.
 
 ---
 
