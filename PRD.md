@@ -178,7 +178,7 @@ Slot annotations cover stated intents and decisions with ground truth — landma
 
 ### 11.1 LLM-as-Judge Rubric
 
-**Bias mitigations:** order-swap (each pair evaluated twice, scores averaged), temperature=0, different judge model from generation model.
+**Bias mitigations:** independent evaluation (full and optimised answers judged separately against their own contexts — no side-by-side presentation, so positional bias does not apply), temperature=0, different judge model from generation model.
 
 **Rubric (1–10 per dimension, independently scored):**
 
